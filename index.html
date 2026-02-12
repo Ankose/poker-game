@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Texas Hold'em Poker</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🃏</text></svg>">
+</head>
+<body>
+    <!-- Login Screen -->
+    <div id="loginScreen" class="login-screen">
+        <div class="login-card">
+            <div class="login-header">
+                <h1>🃏 Texas Hold'em</h1>
+                <p>Play poker with friends online</p>
+            </div>
+            <div class="login-form">
+                <input type="text" id="playerName" placeholder="Enter your name" maxlength="20" autofocus>
+                <input type="text" id="roomCode" placeholder="Room code (optional)" maxlength="20">
+                <button id="joinBtn" class="btn-primary">Join Game</button>
+                <div class="login-hint">
+                    <span>💡</span>
+                    <span>Leave room code empty to create a new game</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="gameScreen" class="game-screen hidden">
+        <!-- Top Bar -->
+        <header class="top-bar">
+            <div class="top-left">
+                <div class="room-info" id="roomInfo" title="Click to copy">
+                    <span class="icon">🏠</span>
+                    <span id="roomDisplay">Room: ...</span>
+                </div>
+            </div>
+
+            <div class="top-center">
+                <div class="pot-info">
+                    <span class="icon">💰</span>
+                    <span id="topPot">$0</span>
+                </div>
+                <div class="player-count">
+                    <span class="icon">👥</span>
+                    <span id="topPlayerCount">0</span>
+                </div>
+            </div>
+
+            <div class="top-right">
+                <button id="startBtn" class="btn-start hidden">Start Game</button>
+                <button id="nextBtn" class="btn-start hidden">Next Hand</button>
+            </div>
+        </header>
+
+        <!-- Main Game Area -->
+        <main class="game-main">
+            <!-- Poker Table -->
+            <div class="table-container">
+                <div class="poker-table">
+                    <!-- Center Area -->
+                    <div class="table-center">
+                        <div class="pot-display">
+                            <div class="pot-label">POT</div>
+                            <div id="potAmount" class="pot-value">$0</div>
+                        </div>
+                        <div id="communityCards" class="community-cards"></div>
+                        <div id="gameStatus" class="game-status">Waiting for players...</div>
+                    </div>
+
+                    <!-- Player Positions -->
+                    <div id="playerSeats" class="player-seats"></div>
+                </div>
+
+                <!-- Waiting Players -->
+                <div id="waitingList" class="waiting-list hidden">
+                    <div class="waiting-header">⏳ Joining Next Hand</div>
+                    <div id="waitingPlayers"></div>
+                </div>
+            </div>
+
+            <!-- Chat Sidebar -->
+            <aside class="chat-panel">
+                <div class="chat-header">
+                    <span class="icon">💬</span>
+                    <span>Chat</span>
+                </div>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-box">
+                    <input type="text" id="chatInput" placeholder="Type a message..." maxlength="200">
+                    <button id="sendChat" class="btn-send">Send</button>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Bottom Panel - Your Cards & Actions -->
+        <footer class="bottom-panel">
+            <div class="your-cards-section">
+                <div class="cards-label">YOUR CARDS</div>
+                <div id="yourCards" class="your-cards"></div>
+                <div id="yourStatus" class="your-info"></div>
+            </div>
+
+            <div id="actionButtons" class="action-panel hidden">
+                <button class="action-btn fold-btn" data-action="fold">
+                    <span class="btn-icon">✕</span>
+                    <span>Fold</span>
+                </button>
+                <button class="action-btn check-btn" data-action="check" style="display:none">
+                    <span class="btn-icon">✓</span>
+                    <span>Check</span>
+                </button>
+                <button class="action-btn call-btn" data-action="call">
+                    <span class="btn-icon">💵</span>
+                    <span>Call <span id="callAmount"></span></span>
+                </button>
+                <div class="raise-box">
+                    <input type="number" id="raiseAmount" min="20" step="10" placeholder="Amount">
+                    <button class="action-btn raise-btn" data-action="raise">
+                        <span class="btn-icon">📈</span>
+                        <span>Raise</span>
+                    </button>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+</html>
