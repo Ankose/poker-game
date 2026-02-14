@@ -291,9 +291,9 @@ class PokerGame {
         this.createdAt = Date.now();
         this.actionTimer = null;
         this.showdownCards = null;
-        this.handHistory = []; // NEW: Hand history
-        this.handNumber = 0; // NEW: Track hand count
-        this.settings = { // NEW: Game settings
+        this.handHistory = [];
+        this.handNumber = 0;
+        this.settings = {
             startingChips: 1000,
             smallBlind: 10,
             bigBlind: 20,
@@ -301,10 +301,9 @@ class PokerGame {
             rebuyEnabled: false,
             rebuyAmount: 1000
         };
-        this.rebuyRequests = []; // NEW: Rebuy requests
+        this.rebuyRequests = [];
     }
 
-    // NEW: Broadcast helper
     broadcast(message) {
         io.to(this.roomId).emit('chatMessage', {
             type: 'system',
@@ -313,7 +312,6 @@ class PokerGame {
         });
     }
 
-    // NEW: Emit state to all players
     emitState() {
         io.to(this.roomId).emit('gameState', this.getState());
         this.players.forEach(p => {
@@ -419,7 +417,7 @@ class PokerGame {
             this.nextPlayer();
         }
 
-        if (this.handInProgress && this.players.filter(p => !p.folded && !p.isAway).length < 2) {
+        if (this.handInProgress && this.players.filter(p => !p.folded && !p.isAway && p.chips > 0).length < 2) {
             console.log('Not enough players, ending hand');
             this.endHand();
         }
@@ -474,10 +472,11 @@ class PokerGame {
     }
 
     startGame() {
-        const activePlayers = this.players.filter(p => !p.isAway);
+        // ✅ FIX: Only count players who have chips AND are not away
+        const activePlayers = this.players.filter(p => !p.isAway && p.chips > 0);
 
         if (activePlayers.length < 2) {
-            console.log('Cannot start: need at least 2 active players');
+            console.log('Cannot start: need at least 2 active players with chips');
             return false;
         }
         if (this.handInProgress) {
@@ -501,21 +500,23 @@ class PokerGame {
         this.players.forEach(p => {
             p.cards = [];
             p.bet = 0;
-            p.folded = p.isAway;
+            // ✅ FIX: Auto-fold broke players
+            p.folded = p.isAway || p.chips === 0;
             p.allIn = false;
             p.hasActed = false;
             p.bestHand = null;
         });
 
+        // ✅ FIX: Only deal to players with chips who aren't away
         for (let i = 0; i < 2; i++) {
             for (let player of this.players) {
-                if (!player.isAway && this.deck.length > 0) {
+                if (!player.isAway && player.chips > 0 && this.deck.length > 0) {
                     player.cards.push(this.deck.pop());
                 }
             }
         }
 
-        console.log('Cards dealt to all players');
+        console.log('Cards dealt to all active players');
 
         if (this.players.length >= 2) {
             const sbIndex = (this.dealerIndex + 1) % this.players.length;
@@ -524,7 +525,7 @@ class PokerGame {
             const sbPlayer = this.players[sbIndex];
             const bbPlayer = this.players[bbIndex];
 
-            if (!sbPlayer.isAway) {
+            if (!sbPlayer.isAway && sbPlayer.chips > 0) {
                 const sbAmount = Math.min(this.settings.smallBlind, sbPlayer.chips);
                 sbPlayer.chips -= sbAmount;
                 sbPlayer.bet = sbAmount;
@@ -532,7 +533,7 @@ class PokerGame {
                 if (sbPlayer.chips === 0) sbPlayer.allIn = true;
             }
 
-            if (!bbPlayer.isAway) {
+            if (!bbPlayer.isAway && bbPlayer.chips > 0) {
                 const bbAmount = Math.min(this.settings.bigBlind, bbPlayer.chips);
                 bbPlayer.chips -= bbAmount;
                 bbPlayer.bet = bbAmount;
@@ -553,7 +554,8 @@ class PokerGame {
         while (attempts < this.players.length && 
                (this.players[this.currentPlayerIndex].folded || 
                 this.players[this.currentPlayerIndex].allIn ||
-                this.players[this.currentPlayerIndex].isAway)) {
+                this.players[this.currentPlayerIndex].isAway ||
+                this.players[this.currentPlayerIndex].chips === 0)) {
             this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
             attempts++;
         }
@@ -670,7 +672,7 @@ class PokerGame {
     }
 
     nextPlayer() {
-        const activePlayers = this.players.filter(p => !p.folded && !p.isAway);
+        const activePlayers = this.players.filter(p => !p.folded && !p.isAway && p.chips > 0);
         if (activePlayers.length <= 1) {
             console.log('Only one player left, ending hand');
             this.clearActionTimer();
@@ -690,7 +692,8 @@ class PokerGame {
         } while (attempts < this.players.length && 
                  (this.players[this.currentPlayerIndex].folded || 
                   this.players[this.currentPlayerIndex].allIn ||
-                  this.players[this.currentPlayerIndex].isAway));
+                  this.players[this.currentPlayerIndex].isAway ||
+                  this.players[this.currentPlayerIndex].chips === 0));
 
         if (attempts >= this.players.length) {
             console.log('All players acted, advancing street');
@@ -701,7 +704,7 @@ class PokerGame {
     }
 
     isBettingRoundComplete() {
-        const activePlayers = this.players.filter(p => !p.folded && !p.allIn && !p.isAway);
+        const activePlayers = this.players.filter(p => !p.folded && !p.allIn && !p.isAway && p.chips > 0);
         if (activePlayers.length === 0) return true;
         return activePlayers.every(p => p.hasActed && p.bet === this.currentBet);
     }
@@ -714,7 +717,7 @@ class PokerGame {
         this.minRaise = this.settings.bigBlind;
         this.players.forEach(p => {
             p.bet = 0;
-            if (!p.folded && !p.allIn && !p.isAway) {
+            if (!p.folded && !p.allIn && !p.isAway && p.chips > 0) {
                 p.hasActed = false;
             }
         });
@@ -752,12 +755,13 @@ class PokerGame {
         while (attempts < this.players.length && 
                (this.players[this.currentPlayerIndex].folded || 
                 this.players[this.currentPlayerIndex].allIn ||
-                this.players[this.currentPlayerIndex].isAway)) {
+                this.players[this.currentPlayerIndex].isAway ||
+                this.players[this.currentPlayerIndex].chips === 0)) {
             this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
             attempts++;
         }
 
-        const playersToAct = this.players.filter(p => !p.folded && !p.allIn && !p.isAway);
+        const playersToAct = this.players.filter(p => !p.folded && !p.allIn && !p.isAway && p.chips > 0);
         if (playersToAct.length === 0 && this.bettingRound < 3) {
             console.log('All players all-in, auto-advancing');
             setTimeout(() => this.advanceStreet(), 1500);
@@ -771,7 +775,6 @@ class PokerGame {
 
         const activePlayers = this.players.filter(p => !p.folded && !p.isAway);
 
-        // Collect hand history data
         const handHistoryEntry = {
             handNumber: this.handNumber,
             pot: this.pot,
@@ -861,7 +864,6 @@ class PokerGame {
             console.log(this.lastAction);
         }
 
-        // Add to hand history (keep last 50 hands)
         this.handHistory.unshift(handHistoryEntry);
         if (this.handHistory.length > 50) {
             this.handHistory = this.handHistory.slice(0, 50);
@@ -871,11 +873,12 @@ class PokerGame {
             this.dealerIndex = (this.dealerIndex + 1) % this.players.length;
         }
 
+        // ✅ FIX: DON'T remove broke players - keep them so they can receive chips/rebuy
         const brokePlayers = this.players.filter(p => p.chips === 0);
-        this.players = this.players.filter(p => p.chips > 0);
         if (brokePlayers.length > 0) {
-            console.log('Removed ' + brokePlayers.length + ' broke player(s)');
+            console.log(brokePlayers.length + ' player(s) broke (can still receive chips/rebuy)');
         }
+        // No longer removing: this.players = this.players.filter(p => p.chips > 0);
 
         if (this.waitingPlayers.length > 0) {
             this.players.push(...this.waitingPlayers);
@@ -885,10 +888,11 @@ class PokerGame {
             this.waitingPlayers = [];
         }
 
-        if (this.players.filter(p => !p.isAway).length < 2) {
+        // ✅ FIX: Check for players with chips (not just away status)
+        if (this.players.filter(p => !p.isAway && p.chips > 0).length < 2) {
             this.gameStarted = false;
             this.lastAction = 'Waiting for more players...';
-            console.log('Not enough active players to continue');
+            console.log('Not enough active players with chips to continue');
         }
     }
 
@@ -1051,8 +1055,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            if (game.players.filter(p => !p.isAway).length < 2) {
-                socket.emit('error', 'Need at least 2 active players to start');
+            if (game.players.filter(p => !p.isAway && p.chips > 0).length < 2) {
+                socket.emit('error', 'Need at least 2 active players with chips to start');
                 return;
             }
 
@@ -1107,7 +1111,7 @@ io.on('connection', (socket) => {
 
             if (socket.id !== game.hostId) return;
 
-            if (!game.handInProgress && game.players.filter(p => !p.isAway).length >= 2) {
+            if (!game.handInProgress && game.players.filter(p => !p.isAway && p.chips > 0).length >= 2) {
                 game.startGame();
                 game.emitState();
                 game.startActionTimer(io);
@@ -1117,7 +1121,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Update settings
     socket.on('updateSettings', (newSettings) => {
         try {
             const roomId = socket.data.roomId;
@@ -1164,7 +1167,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Give chips to player
     socket.on('giveChips', ({ playerId, amount }) => {
         try {
             const roomId = socket.data.roomId;
@@ -1207,7 +1209,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Kick player (FIXED VERSION)
     socket.on('kickPlayer', (playerId) => {
         try {
             const roomId = socket.data.roomId;
@@ -1234,35 +1235,28 @@ io.on('connection', (socket) => {
 
             const playerName = player.name;
 
-            // Remove from game state
             game.players = game.players.filter(p => p.id !== playerId);
             game.waitingPlayers = game.waitingPlayers.filter(p => p.id !== playerId);
-
-            // ✅ FIX: Remove from rebuy requests
             game.rebuyRequests = game.rebuyRequests.filter(r => r.playerId !== playerId);
 
             const kickedSocket = io.sockets.sockets.get(playerId);
             if (kickedSocket) {
-                // ✅ CRITICAL: Clean up ALL server-side state
                 kickedSocket.data.roomId = null;
                 kickedSocket.data.playerName = null;
-                playerRooms.delete(playerId);     // ✅ FIX: Remove from Map
-                kickedSocket.leave(roomId);       // ✅ FIX: Leave Socket.IO room
+                playerRooms.delete(playerId);
+                kickedSocket.leave(roomId);
 
-                // Send kick notification
                 kickedSocket.emit('kicked', 'You have been removed from the game by the host');
 
                 console.log('✅ ' + playerName + ' fully disconnected from server state');
             }
 
-            // Notify other players
             io.to(roomId).emit('chatMessage', {
                 type: 'system',
                 text: '🚫 ' + playerName + ' was removed by host',
                 timestamp: Date.now()
             });
 
-            // Update game state
             game.emitState();
 
             console.log(playerName + ' was kicked by host from room ' + roomId);
@@ -1272,7 +1266,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Request rebuy
     socket.on('requestRebuy', () => {
         try {
             const roomId = socket.data.roomId;
@@ -1325,7 +1318,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Handle rebuy approval/denial
     socket.on('handleRebuy', ({ playerId, approved }) => {
         try {
             const roomId = socket.data.roomId;
@@ -1452,22 +1444,16 @@ http.listen(PORT, HOST, () => {
     const localIP = getLocalIP();
     console.log('');
     console.log('='.repeat(70));
-    console.log('  🎰 TEXAS HOLD\'EM POKER - COMPLETE & FIXED');
+    console.log('  🎰 TEXAS HOLD\'EM POKER - BROKE PLAYERS FIXED');
     console.log('='.repeat(70));
     console.log('');
     console.log('  📍 Local:   http://localhost:' + PORT);
     console.log('  🌐 Network: http://' + localIP + ':' + PORT);
     console.log('');
-    console.log('  ✓ Hand evaluation working');
-    console.log('  ✓ Action timer (configurable)');
-    console.log('  ✓ Showdown cards display');
-    console.log('  ✓ Away/idle mode');
-    console.log('  ✓ Settings panel (host)');
-    console.log('  ✓ Player management (kick/give chips)');
-    console.log('  ✓ Rebuy system');
-    console.log('  ✓ Hand history');
-    console.log('  ✓ Kick/rejoin bug FIXED');
-    console.log('  ✓ All cleanup bugs fixed');
+    console.log('  ✓ Broke players stay in game');
+    console.log('  ✓ Host can give chips to broke players');
+    console.log('  ✓ Rebuy system works for broke players');
+    console.log('  ✓ All features working');
     console.log('');
     console.log('='.repeat(70));
     console.log('');
