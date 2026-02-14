@@ -6,7 +6,6 @@ const socket = io({
 });
 
 // DOM Elements
-const exitBtn = document.getElementById('exitBtn');
 const loginScreen = document.getElementById('loginScreen');
 const gameScreen = document.getElementById('gameScreen');
 const playerNameInput = document.getElementById('playerName');
@@ -32,8 +31,6 @@ const chatInput = document.getElementById('chatInput');
 const sendChat = document.getElementById('sendChat');
 const waitingList = document.getElementById('waitingList');
 const waitingPlayers = document.getElementById('waitingPlayers');
-
-// NEW: Timer, Away, Showdown elements
 const timerDisplay = document.getElementById('timerDisplay');
 const timerSeconds = document.getElementById('timerSeconds');
 const timerCircle = document.getElementById('timerCircle');
@@ -42,6 +39,15 @@ const awayBtn = document.getElementById('awayBtn');
 const showdownModal = document.getElementById('showdownModal');
 const showdownPlayers = document.getElementById('showdownPlayers');
 const closeShowdown = document.getElementById('closeShowdown');
+const exitBtn = document.getElementById('exitBtn');
+const settingsModal = document.getElementById('settingsModal');
+const settingsBtn = document.getElementById('settingsBtn');
+const closeSettings = document.getElementById('closeSettings');
+const rebuyBtn = document.getElementById('rebuyBtn');
+const historySidebar = document.getElementById('historySidebar');
+const historyBtn = document.getElementById('historyBtn');
+const closeHistory = document.getElementById('closeHistory');
+const clearHistory = document.getElementById('clearHistory');
 
 let mySocketId = null;
 let currentRoom = '';
@@ -67,7 +73,6 @@ function isAlreadyInRoom(roomId) {
 
     try {
         const parsed = JSON.parse(data);
-        // Check if timestamp is less than 2 hours old
         const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
         if (parsed.timestamp < twoHoursAgo) {
             localStorage.removeItem(key);
@@ -97,6 +102,393 @@ function clearRoomJoin(roomId) {
 
 // ========== END BROWSER LOCK FUNCTIONS ==========
 
+// ========== TOAST NOTIFICATION SYSTEM ==========
+
+const toastQueue = [];
+let activeToasts = 0;
+const MAX_TOASTS = 3;
+
+function showToast(type, title, message, duration = 4000) {
+    const toast = {
+        type,
+        title,
+        message,
+        duration
+    };
+
+    toastQueue.push(toast);
+    processToastQueue();
+}
+
+function processToastQueue() {
+    if (activeToasts >= MAX_TOASTS || toastQueue.length === 0) return;
+
+    const toast = toastQueue.shift();
+    createToast(toast);
+}
+
+function createToast({ type, title, message, duration }) {
+    activeToasts++;
+
+    const container = document.getElementById('toastContainer');
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast ${type}`;
+
+    const icons = {
+        success: '✅',
+        error: '❌',
+        info: 'ℹ️',
+        warning: '⚠️'
+    };
+
+    toastEl.innerHTML = `
+        <div class="toast-icon">${icons[type]}</div>
+        <div class="toast-content">
+            <div class="toast-title">${escapeHtml(title)}</div>
+            <div class="toast-message">${escapeHtml(message)}</div>
+        </div>
+        <button class="toast-close" aria-label="Close">✕</button>
+    `;
+
+    container.appendChild(toastEl);
+
+    const closeBtn = toastEl.querySelector('.toast-close');
+    closeBtn.addEventListener('click', () => removeToast(toastEl));
+
+    const timeoutId = setTimeout(() => removeToast(toastEl), duration);
+
+    toastEl.addEventListener('mouseenter', () => {
+        clearTimeout(timeoutId);
+        toastEl.style.animationPlayState = 'paused';
+    });
+
+    toastEl.addEventListener('mouseleave', () => {
+        setTimeout(() => removeToast(toastEl), 1000);
+    });
+}
+
+function removeToast(toastEl) {
+    if (toastEl.classList.contains('removing')) return;
+
+    toastEl.classList.add('removing');
+
+    setTimeout(() => {
+        toastEl.remove();
+        activeToasts--;
+        processToastQueue();
+    }, 300);
+}
+
+function toastSuccess(message) {
+    showToast('success', 'Success', message);
+}
+
+function toastError(message) {
+    showToast('error', 'Error', message);
+}
+
+function toastInfo(message) {
+    showToast('info', 'Info', message);
+}
+
+function toastWarning(message) {
+    showToast('warning', 'Warning', message);
+}
+
+// ========== END TOAST SYSTEM ==========
+
+// ========== SETTINGS PANEL SYSTEM ==========
+
+settingsBtn.addEventListener('click', () => {
+    openSettingsPanel();
+});
+
+closeSettings.addEventListener('click', () => {
+    settingsModal.classList.add('hidden');
+});
+
+settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+        settingsModal.classList.add('hidden');
+    }
+});
+
+function openSettingsPanel() {
+    const room = gameState;
+    if (!room) return;
+
+    if (room.settings) {
+        document.getElementById('startingChips').value = room.settings.startingChips || 1000;
+        document.getElementById('smallBlind').value = room.settings.smallBlind || 10;
+        document.getElementById('bigBlind').value = room.settings.bigBlind || 20;
+        document.getElementById('turnTimer').value = room.settings.turnTimer || 60;
+        document.getElementById('rebuyEnabled').checked = room.settings.rebuyEnabled || false;
+        document.getElementById('rebuyAmount').value = room.settings.rebuyAmount || 1000;
+    }
+
+    const gameSettingsInputs = ['startingChips', 'smallBlind', 'bigBlind', 'turnTimer'];
+    gameSettingsInputs.forEach(id => {
+        const input = document.getElementById(id);
+        input.disabled = room.handInProgress;
+    });
+
+    updatePlayerManagementList();
+    updateRebuyRequestsList();
+
+    settingsModal.classList.remove('hidden');
+}
+
+function updatePlayerManagementList() {
+    const list = document.getElementById('playerManagementList');
+    list.innerHTML = '';
+
+    if (!gameState || !gameState.players) return;
+
+    gameState.players.forEach(player => {
+        const item = document.createElement('div');
+        item.className = 'player-management-item';
+
+        const isMe = player.id === mySocketId;
+
+        item.innerHTML = `
+            <div class="player-management-info">
+                <div class="player-management-name">${escapeHtml(player.name)}${isMe ? ' (You)' : ''}</div>
+                <div class="player-management-chips">💰 $${player.chips}</div>
+            </div>
+            <div class="player-management-actions">
+                ${!isMe ? `
+                    <button class="btn-small btn-give" data-player-id="${player.id}">Give Chips</button>
+                    <button class="btn-small btn-kick" data-player-id="${player.id}">Kick</button>
+                ` : ''}
+            </div>
+        `;
+
+        list.appendChild(item);
+    });
+
+    list.querySelectorAll('.btn-give').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const playerId = btn.dataset.playerId;
+            const amount = parseInt(document.getElementById('giveChipsAmount').value);
+
+            if (!amount || amount < 1) {
+                toastError('Please enter a valid chip amount');
+                return;
+            }
+
+            socket.emit('giveChips', { playerId, amount });
+            toastSuccess('Chips sent to player');
+        });
+    });
+
+    list.querySelectorAll('.btn-kick').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const playerId = btn.dataset.playerId;
+            const playerName = gameState.players.find(p => p.id === playerId)?.name;
+
+            if (confirm(`Are you sure you want to kick ${playerName}?`)) {
+                socket.emit('kickPlayer', playerId);
+                toastInfo(`${playerName} was kicked`);
+            }
+        });
+    });
+}
+
+function updateRebuyRequestsList() {
+    const section = document.getElementById('rebuyRequestsSection');
+    const list = document.getElementById('rebuyRequestsList');
+
+    if (!gameState || !gameState.rebuyRequests || gameState.rebuyRequests.length === 0) {
+        section.classList.add('hidden');
+        return;
+    }
+
+    section.classList.remove('hidden');
+    list.innerHTML = '';
+
+    gameState.rebuyRequests.forEach(request => {
+        const item = document.createElement('div');
+        item.className = 'rebuy-request-item';
+
+        item.innerHTML = `
+            <div>
+                <strong>${escapeHtml(request.playerName)}</strong> wants to rebuy
+            </div>
+            <div class="player-management-actions">
+                <button class="btn-small btn-give" data-player-id="${request.playerId}">Approve</button>
+                <button class="btn-small btn-kick" data-player-id="${request.playerId}">Deny</button>
+            </div>
+        `;
+
+        list.appendChild(item);
+    });
+
+    list.querySelectorAll('.btn-give').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const playerId = btn.dataset.playerId;
+            socket.emit('handleRebuy', { playerId, approved: true });
+            toastSuccess('Rebuy approved');
+        });
+    });
+
+    list.querySelectorAll('.btn-kick').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const playerId = btn.dataset.playerId;
+            socket.emit('handleRebuy', { playerId, approved: false });
+            toastInfo('Rebuy denied');
+        });
+    });
+}
+
+document.getElementById('saveSettings').addEventListener('click', () => {
+    const newSettings = {
+        startingChips: parseInt(document.getElementById('startingChips').value),
+        smallBlind: parseInt(document.getElementById('smallBlind').value),
+        bigBlind: parseInt(document.getElementById('bigBlind').value),
+        turnTimer: parseInt(document.getElementById('turnTimer').value),
+        rebuyEnabled: document.getElementById('rebuyEnabled').checked,
+        rebuyAmount: parseInt(document.getElementById('rebuyAmount').value)
+    };
+
+    if (newSettings.bigBlind <= newSettings.smallBlind) {
+        toastError('Big blind must be greater than small blind');
+        return;
+    }
+
+    socket.emit('updateSettings', newSettings);
+    settingsModal.classList.add('hidden');
+});
+
+rebuyBtn.addEventListener('click', () => {
+    if (confirm('Request a rebuy from the host?')) {
+        socket.emit('requestRebuy');
+        rebuyBtn.classList.add('hidden');
+        toastInfo('Rebuy requested. Waiting for host approval...');
+    }
+});
+
+// ========== END SETTINGS SYSTEM ==========
+
+// ========== HAND HISTORY SIDEBAR ==========
+
+historyBtn.addEventListener('click', () => {
+    historySidebar.classList.toggle('hidden');
+    updateHistoryDisplay();
+});
+
+closeHistory.addEventListener('click', () => {
+    historySidebar.classList.add('hidden');
+});
+
+clearHistory.addEventListener('click', () => {
+    if (confirm('Clear all hand history?')) {
+        document.getElementById('historyContent').innerHTML = 
+            '<p class="history-empty">No hands played yet</p>';
+    }
+});
+
+function updateHistoryDisplay() {
+    const content = document.getElementById('historyContent');
+
+    if (!gameState || !gameState.handHistory || gameState.handHistory.length === 0) {
+        content.innerHTML = '<p class="history-empty">No hands played yet</p>';
+        return;
+    }
+
+    content.innerHTML = '';
+
+    gameState.handHistory.forEach(hand => {
+        const handEl = createHandElement(hand);
+        content.appendChild(handEl);
+    });
+}
+
+function createHandElement(hand) {
+    const div = document.createElement('div');
+    div.className = 'history-hand';
+
+    const winners = hand.winners || [];
+    const winnerText = winners.length === 1 
+        ? `${winners[0].playerName} won $${winners[0].amount}`
+        : `Split pot: $${hand.pot}`;
+
+    const handRank = winners[0]?.handRank || 'Unknown';
+
+    div.innerHTML = `
+        <div class="history-hand-header">
+            <div>
+                <div class="history-hand-title">Hand #${hand.handNumber}</div>
+                <div class="history-hand-subtitle">${winnerText}</div>
+            </div>
+            <div class="history-expand-icon">▼</div>
+        </div>
+        <div class="history-hand-details">
+            <div class="history-hand-body">
+                <div class="history-section">
+                    <div class="history-section-title">Community Cards</div>
+                    <div class="history-community-cards">
+                        ${hand.communityCards.map(card => createHistoryCard(card)).join('')}
+                    </div>
+                </div>
+
+                <div class="history-section">
+                    <div class="history-section-title">Winner${winners.length > 1 ? 's' : ''}</div>
+                    ${winners.map(winner => `
+                        <div class="history-player">
+                            <div class="history-player-name winner">
+                                ✅ ${escapeHtml(winner.playerName)} - $${winner.amount}
+                            </div>
+                            <div class="history-player-hand">${escapeHtml(winner.handRank)}</div>
+                            <div class="history-player-cards">
+                                ${winner.cards.map(card => createHistoryCard(card)).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <div class="history-section">
+                    <div class="history-section-title">All Players</div>
+                    ${hand.players.map(player => `
+                        <div class="history-player">
+                            <div class="history-player-name">
+                                ${escapeHtml(player.playerName)}
+                            </div>
+                            ${player.folded ? 
+                                '<div class="history-player-info">Folded</div>' :
+                                `<div class="history-player-cards">
+                                    ${player.cards.map(card => createHistoryCard(card)).join('')}
+                                </div>
+                                <div class="history-player-info">Final chips: $${player.finalChips}</div>`
+                            }
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+
+    const header = div.querySelector('.history-hand-header');
+    header.addEventListener('click', () => {
+        div.classList.toggle('expanded');
+    });
+
+    return div;
+}
+
+function createHistoryCard(card) {
+    const isRed = card.suit === '♥' || card.suit === '♦';
+    return `
+        <div class="history-card ${isRed ? 'red' : 'black'}">
+            <div class="history-card-rank">${escapeHtml(card.rank)}</div>
+            <div class="history-card-suit">${card.suit}</div>
+        </div>
+    `;
+}
+
+// ========== END HISTORY SYSTEM ==========
+
+// ========== SOCKET CONNECTION HANDLERS ==========
+
 socket.on('connect', () => {
     mySocketId = socket.id;
     console.log('Connected to server:', mySocketId);
@@ -111,29 +503,21 @@ socket.on('connect', () => {
 socket.on('disconnect', (reason) => {
     console.log('Disconnected:', reason);
     reconnectAttempted = true;
-    addChat({
-        type: 'system',
-        text: '⚠️ Connection lost. Reconnecting...'
-    });
+    toastWarning('Connection lost. Reconnecting...');
 });
 
 socket.on('connect_error', (error) => {
     console.error('Connection error:', error);
-    addChat({
-        type: 'system',
-        text: '❌ Connection error. Retrying...'
-    });
+    toastError('Connection error. Retrying...');
 });
 
 socket.on('reconnect', (attemptNumber) => {
     console.log('Reconnected after', attemptNumber, 'attempts');
-    addChat({
-        type: 'system',
-        text: '✓ Reconnected to server'
-    });
+    toastSuccess('Reconnected to server');
 });
 
-// Join Game
+// ========== JOIN GAME ==========
+
 joinBtn.addEventListener('click', handleJoin);
 playerNameInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') handleJoin();
@@ -147,18 +531,17 @@ function handleJoin() {
     let room = roomCodeInput.value.trim().toUpperCase();
 
     if (!name) {
-        alert('Please enter your name');
+        toastError('Please enter your name');
         playerNameInput.focus();
         return;
     }
 
     if (name.length < 2 || name.length > 20) {
-        alert('Name must be 2-20 characters');
+        toastError('Name must be 2-20 characters');
         playerNameInput.focus();
         return;
     }
 
-    // Creating new room - no check needed
     if (!room) {
         myPlayerName = name;
         console.log('Joining game:', { name, room: 'new room' });
@@ -166,7 +549,6 @@ function handleJoin() {
         return;
     }
 
-    // Check if already in this room from this browser
     if (isAlreadyInRoom(room)) {
         const key = getStorageKey(room);
         const data = localStorage.getItem(key);
@@ -179,7 +561,7 @@ function handleJoin() {
             }
         } catch (e) {}
 
-        alert('⚠️ This browser is already in room ' + room + ' as "' + existingName + '"\n\nYou cannot join the same room multiple times from the same device.\n\nTo play with multiple accounts, use a different browser or device.');
+        toastError('You are already in room ' + room + ' as "' + existingName + '"');
         roomCodeInput.value = '';
         roomCodeInput.focus();
         return;
@@ -190,7 +572,8 @@ function handleJoin() {
     socket.emit('joinGame', { playerName: name, roomId: room });
 }
 
-// Game Controls
+// ========== GAME CONTROLS ==========
+
 startBtn.addEventListener('click', () => {
     console.log('Starting game...');
     socket.emit('startGame');
@@ -201,7 +584,6 @@ nextBtn.addEventListener('click', () => {
     socket.emit('nextHand');
 });
 
-// NEW: Away Button
 awayBtn.addEventListener('click', () => {
     isAway = !isAway;
     socket.emit('toggleAway');
@@ -217,49 +599,42 @@ awayBtn.addEventListener('click', () => {
     console.log('Away status toggled:', isAway);
 });
 
-// NEW: Exit Game Button
 exitBtn.addEventListener('click', () => {
     if (confirm('Are you sure you want to leave this game?\n\nYou will be removed from the room.')) {
         console.log('Exiting game...');
-        
-        // Clear room lock
+
         if (currentRoom) {
             clearRoomJoin(currentRoom);
         }
-        
-        // Disconnect and reload
+
         socket.disconnect();
-        
-        // Reset state
+
         currentRoom = '';
         myPlayerName = '';
         gameState = null;
-        
-        // Show login screen
+
         gameScreen.classList.add('hidden');
         loginScreen.classList.remove('hidden');
-        
-        // Clear inputs
+
         playerNameInput.value = '';
         roomCodeInput.value = '';
         playerNameInput.focus();
-        
-        // Reconnect socket for next join
+
         setTimeout(() => {
             socket.connect();
         }, 500);
-        
+
+        toastSuccess('Left game successfully');
         console.log('✅ Exited game successfully');
     }
 });
 
-
-// NEW: Close Showdown
 closeShowdown.addEventListener('click', () => {
     showdownModal.classList.add('hidden');
 });
 
-// Action Buttons
+// ========== ACTION BUTTONS ==========
+
 document.querySelectorAll('.action-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -270,7 +645,7 @@ document.querySelectorAll('.action-btn').forEach(btn => {
             const minRaise = gameState?.minRaise || 20;
 
             if (amount < minRaise) {
-                alert('Minimum raise is $' + minRaise);
+                toastError('Minimum raise is $' + minRaise);
                 raiseAmount.focus();
                 raiseAmount.select();
                 return;
@@ -278,7 +653,7 @@ document.querySelectorAll('.action-btn').forEach(btn => {
 
             const me = gameState?.players.find(p => p.id === mySocketId);
             if (me && amount > me.chips) {
-                alert('You only have $' + me.chips + ' chips');
+                toastError('You only have $' + me.chips + ' chips');
                 raiseAmount.value = me.chips;
                 raiseAmount.focus();
                 raiseAmount.select();
@@ -291,7 +666,8 @@ document.querySelectorAll('.action-btn').forEach(btn => {
     });
 });
 
-// Chat
+// ========== CHAT ==========
+
 sendChat.addEventListener('click', sendMessage);
 chatInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
@@ -302,7 +678,7 @@ function sendMessage() {
     if (!msg) return;
 
     if (msg.length > 200) {
-        alert('Message too long (max 200 characters)');
+        toastError('Message too long (max 200 characters)');
         return;
     }
 
@@ -311,7 +687,8 @@ function sendMessage() {
     chatInput.focus();
 }
 
-// Copy Room Code
+// ========== COPY ROOM CODE ==========
+
 roomInfo.addEventListener('click', () => {
     if (!currentRoom) return;
 
@@ -339,7 +716,8 @@ roomInfo.addEventListener('click', () => {
     });
 });
 
-// NEW: Timer Functions
+// ========== TIMER FUNCTIONS ==========
+
 function startTimer(playerName) {
     stopTimer();
 
@@ -360,18 +738,16 @@ function updateTimerDisplay() {
 
     timerSeconds.textContent = remaining;
 
-    // Update circle (circumference = 2 * π * 45 = 282.74)
     const progress = remaining / 60;
     const dashOffset = 283 * (1 - progress);
     timerCircle.style.strokeDashoffset = dashOffset;
 
-    // Color based on time
     if (remaining > 40) {
-        timerCircle.style.stroke = '#10b981'; // Green
+        timerCircle.style.stroke = '#10b981';
     } else if (remaining > 20) {
-        timerCircle.style.stroke = '#f59e0b'; // Orange
+        timerCircle.style.stroke = '#f59e0b';
     } else {
-        timerCircle.style.stroke = '#ef4444'; // Red
+        timerCircle.style.stroke = '#ef4444';
     }
 
     if (remaining === 0) {
@@ -387,7 +763,8 @@ function stopTimer() {
     timerDisplay.classList.add('hidden');
 }
 
-// NEW: Show Showdown Modal
+// ========== SHOWDOWN MODAL ==========
+
 function showShowdown(players) {
     showdownPlayers.innerHTML = '';
 
@@ -424,13 +801,13 @@ function showShowdown(players) {
 
     showdownModal.classList.remove('hidden');
 
-    // Auto-close after 12 seconds
     setTimeout(() => {
         showdownModal.classList.add('hidden');
     }, 12000);
 }
 
-// Socket Events
+// ========== SOCKET EVENT HANDLERS ==========
+
 socket.on('roomAssigned', (room) => {
     currentRoom = room;
     roomDisplay.textContent = 'Room: ' + room;
@@ -440,6 +817,8 @@ socket.on('roomAssigned', (room) => {
 
     loginScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
+
+    toastSuccess('Joined room ' + room);
 
     addChat({
         type: 'system',
@@ -453,7 +832,9 @@ socket.on('roomAssigned', (room) => {
 });
 
 socket.on('gameState', (state) => {
+    const previousState = gameState;
     gameState = state;
+
     console.log('Game state updated:', {
         players: state.players.length,
         waiting: state.waitingPlayers.length,
@@ -461,10 +842,15 @@ socket.on('gameState', (state) => {
         handInProgress: state.handInProgress
     });
 
-    // NEW: Show showdown if available
+    // Show showdown if available
     if (!state.handInProgress && state.showdownCards && state.showdownCards.length > 0) {
         console.log('Showdown data received:', state.showdownCards);
         showShowdown(state.showdownCards);
+    }
+
+    // Update history sidebar if open
+    if (!historySidebar.classList.contains('hidden')) {
+        updateHistoryDisplay();
     }
 
     updateGame(state);
@@ -487,10 +873,36 @@ socket.on('chatMessage', (msg) => {
 
 socket.on('error', (msg) => {
     console.error('Server error:', msg);
-    alert('Error: ' + msg);
+    toastError(msg);
 });
 
-// Update Game UI
+socket.on('settingsUpdated', (settings) => {
+    toastSuccess('Game settings updated');
+    console.log('Settings updated:', settings);
+});
+
+socket.on('rebuyRequest', ({ playerId, playerName }) => {
+    toastInfo(playerName + ' requested a rebuy');
+
+    if (!settingsModal.classList.contains('hidden')) {
+        updateRebuyRequestsList();
+    }
+});
+
+socket.on('kicked', (reason) => {
+    toastError(reason);
+
+    if (currentRoom) {
+        clearRoomJoin(currentRoom);
+    }
+
+    setTimeout(() => {
+        window.location.reload();
+    }, 2000);
+});
+
+// ========== UPDATE GAME UI ==========
+
 function updateGame(state) {
     topPot.textContent = '$' + state.pot;
     topPlayerCount.textContent = state.players.length;
@@ -527,7 +939,6 @@ function updateGame(state) {
             card.classList.add('folded');
         }
 
-        // NEW: Away status styling
         if (player.isAway) {
             card.classList.add('away');
         }
@@ -583,7 +994,6 @@ function updateGame(state) {
             statusText = '$' + me.chips;
         }
 
-        // Add hand description if available
         if (myHandDescription && state.communityCards.length >= 3 && !me.folded && !me.isAway) {
             statusText = myHandDescription + (statusText ? ' | ' + statusText : '');
         }
@@ -602,7 +1012,7 @@ function updateGame(state) {
         actionButtons.classList.add('hidden');
     }
 
-    // NEW: Timer control
+    // Timer control
     if (state.handInProgress && state.currentPlayerIndex >= 0) {
         const currentPlayer = state.players[state.currentPlayerIndex];
         if (currentPlayer && !currentPlayer.folded && !currentPlayer.allIn && !currentPlayer.isAway) {
@@ -616,6 +1026,19 @@ function updateGame(state) {
 
     // Control buttons (host only)
     const isHost = mySocketId === state.hostId;
+
+    if (isHost) {
+        settingsBtn.classList.remove('hidden');
+    } else {
+        settingsBtn.classList.add('hidden');
+    }
+
+    if (me && me.chips === 0 && state.settings?.rebuyEnabled) {
+        rebuyBtn.classList.remove('hidden');
+    } else {
+        rebuyBtn.classList.add('hidden');
+    }
+
     if (isHost) {
         if (!state.handInProgress && state.players.length >= 2) {
             startBtn.classList.remove('hidden');
@@ -707,7 +1130,8 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
-// Keyboard shortcuts
+// ========== KEYBOARD SHORTCUTS ==========
+
 document.addEventListener('keydown', (e) => {
     if (document.activeElement.tagName === 'INPUT' || 
         document.activeElement.tagName === 'TEXTAREA') {
@@ -746,3 +1170,6 @@ console.log('⏱️  60-second timer enabled');
 console.log('🎴 Showdown display enabled');
 console.log('🚶 Away mode enabled');
 console.log('🔒 Browser lock enabled - one seat per device per room');
+console.log('🎨 Toast notifications enabled');
+console.log('⚙️  Settings panel enabled');
+console.log('📜 Hand history enabled');
