@@ -47,7 +47,7 @@ function generateRoomCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// ========== HAND EVALUATION (UNCHANGED) ==========
+// ========== HAND EVALUATION ==========
 
 function get5CardCombos(cards) {
     if (cards.length < 5) return [];
@@ -290,8 +290,35 @@ class PokerGame {
         this.hostId = null;
         this.createdAt = Date.now();
         this.actionTimer = null;
-        this.showdownCards = null; // NEW: For showdown display
-        
+        this.showdownCards = null;
+        this.handHistory = []; // NEW: Hand history
+        this.handNumber = 0; // NEW: Track hand count
+        this.settings = { // NEW: Game settings
+            startingChips: 1000,
+            smallBlind: 10,
+            bigBlind: 20,
+            turnTimer: 60,
+            rebuyEnabled: false,
+            rebuyAmount: 1000
+        };
+        this.rebuyRequests = []; // NEW: Rebuy requests
+    }
+
+    // NEW: Broadcast helper
+    broadcast(message) {
+        io.to(this.roomId).emit('chatMessage', {
+            type: 'system',
+            text: message.text || message,
+            timestamp: Date.now()
+        });
+    }
+
+    // NEW: Emit state to all players
+    emitState() {
+        io.to(this.roomId).emit('gameState', this.getState());
+        this.players.forEach(p => {
+            io.to(p.id).emit('privateState', this.getPrivateState(p.id));
+        });
     }
 
     addPlayer(socketId, playerName) {
@@ -310,14 +337,14 @@ class PokerGame {
         const player = {
             id: socketId,
             name: playerName,
-            chips: 1000,
+            chips: this.settings.startingChips,
             cards: [],
             bet: 0,
             folded: false,
             allIn: false,
             hasActed: false,
             bestHand: null,
-            isAway: false // NEW: Away status
+            isAway: false
         };
 
         if (!this.hostId) {
@@ -336,14 +363,12 @@ class PokerGame {
         }
     }
 
-    // NEW: Toggle away mode
     toggleAway(socketId) {
         const player = this.players.find(p => p.id === socketId);
         if (player) {
             player.isAway = !player.isAway;
             console.log(player.name + ' is now ' + (player.isAway ? 'AWAY' : 'ACTIVE'));
 
-            // If going away during their turn, auto-fold
             if (player.isAway && this.players[this.currentPlayerIndex]?.id === socketId && this.handInProgress) {
                 this.clearActionTimer();
                 player.folded = true;
@@ -371,6 +396,7 @@ class PokerGame {
 
         this.players = this.players.filter(p => p.id !== socketId);
         this.waitingPlayers = this.waitingPlayers.filter(p => p.id !== socketId);
+        this.rebuyRequests = this.rebuyRequests.filter(r => r.playerId !== socketId);
 
         console.log(playerName + ' removed from game');
 
@@ -421,7 +447,7 @@ class PokerGame {
             return;
         }
 
-        console.log('⏱️  60-second timer started for ' + currentPlayer.name);
+        console.log('⏱️  Timer started for ' + currentPlayer.name);
 
         this.actionTimer = setTimeout(() => {
             console.log('⏰ TIME EXPIRED - Auto-folding ' + currentPlayer.name);
@@ -432,15 +458,12 @@ class PokerGame {
 
             this.nextPlayer();
 
-            io.to(this.roomId).emit('gameState', this.getState());
-            this.players.forEach(p => {
-                io.to(p.id).emit('privateState', this.getPrivateState(p.id));
-            });
+            this.emitState();
 
             if (this.handInProgress) {
                 this.startActionTimer(io);
             }
-        }, ACTION_TIMEOUT_MS);
+        }, this.settings.turnTimer * 1000);
     }
 
     clearActionTimer() {
@@ -451,7 +474,6 @@ class PokerGame {
     }
 
     startGame() {
-        // Skip away players
         const activePlayers = this.players.filter(p => !p.isAway);
 
         if (activePlayers.length < 2) {
@@ -463,22 +485,23 @@ class PokerGame {
             return false;
         }
 
-        console.log('Starting game with ' + this.players.length + ' players');
+        console.log('Starting hand #' + (this.handNumber + 1) + ' with ' + this.players.length + ' players');
 
+        this.handNumber++;
         this.gameStarted = true;
         this.handInProgress = true;
         this.deck = this.createDeck();
         this.communityCards = [];
         this.pot = 0;
-        this.currentBet = this.bigBlind;
-        this.minRaise = this.bigBlind;
+        this.currentBet = this.settings.bigBlind;
+        this.minRaise = this.settings.bigBlind;
         this.bettingRound = 0;
-        this.showdownCards = null; // NEW: Reset showdown
+        this.showdownCards = null;
 
         this.players.forEach(p => {
             p.cards = [];
             p.bet = 0;
-            p.folded = p.isAway; // NEW: Auto-fold away players
+            p.folded = p.isAway;
             p.allIn = false;
             p.hasActed = false;
             p.bestHand = null;
@@ -502,7 +525,7 @@ class PokerGame {
             const bbPlayer = this.players[bbIndex];
 
             if (!sbPlayer.isAway) {
-                const sbAmount = Math.min(this.smallBlind, sbPlayer.chips);
+                const sbAmount = Math.min(this.settings.smallBlind, sbPlayer.chips);
                 sbPlayer.chips -= sbAmount;
                 sbPlayer.bet = sbAmount;
                 this.pot += sbAmount;
@@ -510,7 +533,7 @@ class PokerGame {
             }
 
             if (!bbPlayer.isAway) {
-                const bbAmount = Math.min(this.bigBlind, bbPlayer.chips);
+                const bbAmount = Math.min(this.settings.bigBlind, bbPlayer.chips);
                 bbPlayer.chips -= bbAmount;
                 bbPlayer.bet = bbAmount;
                 this.pot += bbAmount;
@@ -535,7 +558,7 @@ class PokerGame {
             attempts++;
         }
 
-        this.lastAction = 'New hand started! Blinds: $' + this.smallBlind + '/$' + this.bigBlind;
+        this.lastAction = 'Hand #' + this.handNumber + ' started! Blinds: $' + this.settings.smallBlind + '/$' + this.settings.bigBlind;
         console.log('First to act: ' + this.players[this.currentPlayerIndex].name);
         return true;
     }
@@ -688,7 +711,7 @@ class PokerGame {
         console.log('Advancing to betting round ' + this.bettingRound);
 
         this.currentBet = 0;
-        this.minRaise = this.bigBlind;
+        this.minRaise = this.settings.bigBlind;
         this.players.forEach(p => {
             p.bet = 0;
             if (!p.folded && !p.allIn && !p.isAway) {
@@ -744,11 +767,26 @@ class PokerGame {
     endHand() {
         this.handInProgress = false;
         this.clearActionTimer();
-        console.log('Hand ended');
+        console.log('Hand #' + this.handNumber + ' ended');
 
         const activePlayers = this.players.filter(p => !p.folded && !p.isAway);
 
-        // NEW: Collect showdown data
+        // Collect hand history data
+        const handHistoryEntry = {
+            handNumber: this.handNumber,
+            pot: this.pot,
+            communityCards: [...this.communityCards],
+            players: this.players.map(p => ({
+                playerId: p.id,
+                playerName: p.name,
+                cards: [...p.cards],
+                folded: p.folded,
+                finalChips: p.chips
+            })),
+            winners: [],
+            timestamp: Date.now()
+        };
+
         if (activePlayers.length > 1) {
             this.showdownCards = activePlayers.map(p => {
                 const hand = evaluateHand(p.cards, this.communityCards);
@@ -767,6 +805,14 @@ class PokerGame {
             activePlayers[0].chips += this.pot;
             this.lastAction = '🏆 ' + activePlayers[0].name + ' wins $' + this.pot;
             console.log(this.lastAction);
+
+            handHistoryEntry.winners = [{
+                playerId: activePlayers[0].id,
+                playerName: activePlayers[0].name,
+                cards: activePlayers[0].cards,
+                handRank: 'Won uncontested',
+                amount: this.pot
+            }];
         } else if (activePlayers.length > 1) {
             activePlayers.forEach(p => {
                 p.bestHand = evaluateHand(p.cards, this.communityCards);
@@ -791,12 +837,34 @@ class PokerGame {
             if (winners.length === 1) {
                 const handDesc = getHandDescription(winners[0].bestHand);
                 this.lastAction = '🏆 ' + winners[0].name + ' wins $' + this.pot + ' with ' + handDesc;
+
+                handHistoryEntry.winners = [{
+                    playerId: winners[0].id,
+                    playerName: winners[0].name,
+                    cards: winners[0].cards,
+                    handRank: handDesc,
+                    amount: this.pot
+                }];
             } else {
                 const names = winners.map(w => w.name).join(', ');
                 this.lastAction = '🏆 ' + names + ' split $' + winAmount + ' each';
+
+                handHistoryEntry.winners = winners.map(w => ({
+                    playerId: w.id,
+                    playerName: w.name,
+                    cards: w.cards,
+                    handRank: getHandDescription(w.bestHand),
+                    amount: winAmount
+                }));
             }
 
             console.log(this.lastAction);
+        }
+
+        // Add to hand history (keep last 50 hands)
+        this.handHistory.unshift(handHistoryEntry);
+        if (this.handHistory.length > 50) {
+            this.handHistory = this.handHistory.slice(0, 50);
         }
 
         if (this.players.length > 0) {
@@ -834,7 +902,7 @@ class PokerGame {
                 folded: p.folded,
                 allIn: p.allIn,
                 cardCount: p.cards.length,
-                isAway: p.isAway // NEW
+                isAway: p.isAway
             })),
             waitingPlayers: this.waitingPlayers.map(p => ({
                 id: p.id,
@@ -851,7 +919,10 @@ class PokerGame {
             lastAction: this.lastAction,
             hostId: this.hostId,
             bettingRound: this.bettingRound,
-            showdownCards: this.showdownCards // NEW
+            showdownCards: this.showdownCards,
+            handHistory: this.handHistory,
+            settings: this.settings,
+            rebuyRequests: this.rebuyRequests
         };
     }
 
@@ -872,7 +943,8 @@ class PokerGame {
     }
 }
 
-// Socket.IO handlers
+// ========== SOCKET.IO HANDLERS ==========
+
 io.on('connection', (socket) => {
     console.log('✓ Player connected: ' + socket.id);
 
@@ -940,7 +1012,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NEW: Toggle away
     socket.on('toggleAway', () => {
         try {
             const roomId = socket.data.roomId;
@@ -986,10 +1057,7 @@ io.on('connection', (socket) => {
             }
 
             if (game.startGame()) {
-                io.to(roomId).emit('gameState', game.getState());
-                game.players.forEach(p => {
-                    io.to(p.id).emit('privateState', game.getPrivateState(p.id));
-                });
+                game.emitState();
                 io.to(roomId).emit('chatMessage', {
                     type: 'system',
                     text: 'Game started!',
@@ -1015,11 +1083,7 @@ io.on('connection', (socket) => {
             if (!game) return;
 
             if (game.playerAction(socket.id, action, amount)) {
-                io.to(roomId).emit('gameState', game.getState());
-
-                game.players.forEach(p => {
-                    io.to(p.id).emit('privateState', game.getPrivateState(p.id));
-                });
+                game.emitState();
 
                 if (game.handInProgress) {
                     game.startActionTimer(io);
@@ -1045,15 +1109,276 @@ io.on('connection', (socket) => {
 
             if (!game.handInProgress && game.players.filter(p => !p.isAway).length >= 2) {
                 game.startGame();
-                io.to(roomId).emit('gameState', game.getState());
-                game.players.forEach(p => {
-                    io.to(p.id).emit('privateState', game.getPrivateState(p.id));
-                });
-
+                game.emitState();
                 game.startActionTimer(io);
             }
         } catch (error) {
             console.error('Error in nextHand:', error);
+        }
+    });
+
+    // NEW: Update settings
+    socket.on('updateSettings', (newSettings) => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            if (socket.id !== game.hostId) {
+                socket.emit('error', 'Only the host can change settings');
+                return;
+            }
+
+            if (game.handInProgress) {
+                socket.emit('error', 'Cannot change settings during a hand');
+                return;
+            }
+
+            game.settings = {
+                startingChips: parseInt(newSettings.startingChips) || 1000,
+                smallBlind: parseInt(newSettings.smallBlind) || 10,
+                bigBlind: parseInt(newSettings.bigBlind) || 20,
+                turnTimer: parseInt(newSettings.turnTimer) || 60,
+                rebuyEnabled: !!newSettings.rebuyEnabled,
+                rebuyAmount: parseInt(newSettings.rebuyAmount) || 1000
+            };
+
+            game.smallBlind = game.settings.smallBlind;
+            game.bigBlind = game.settings.bigBlind;
+
+            console.log('Settings updated in room ' + roomId);
+
+            socket.emit('settingsUpdated', game.settings);
+            game.emitState();
+
+            io.to(roomId).emit('chatMessage', {
+                type: 'system',
+                text: 'Host updated game settings',
+                timestamp: Date.now()
+            });
+        } catch (error) {
+            console.error('Error in updateSettings:', error);
+            socket.emit('error', 'Failed to update settings');
+        }
+    });
+
+    // NEW: Give chips to player
+    socket.on('giveChips', ({ playerId, amount }) => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            if (socket.id !== game.hostId) {
+                socket.emit('error', 'Only the host can give chips');
+                return;
+            }
+
+            const player = game.players.find(p => p.id === playerId);
+            if (!player) {
+                socket.emit('error', 'Player not found');
+                return;
+            }
+
+            const chipsAmount = parseInt(amount) || 0;
+            if (chipsAmount < 1) {
+                socket.emit('error', 'Invalid chip amount');
+                return;
+            }
+
+            player.chips += chipsAmount;
+
+            console.log('Host gave ' + chipsAmount + ' chips to ' + player.name);
+
+            game.emitState();
+
+            io.to(roomId).emit('chatMessage', {
+                type: 'system',
+                text: '💰 Host gave $' + chipsAmount + ' to ' + player.name,
+                timestamp: Date.now()
+            });
+        } catch (error) {
+            console.error('Error in giveChips:', error);
+            socket.emit('error', 'Failed to give chips');
+        }
+    });
+
+    // NEW: Kick player (FIXED VERSION)
+    socket.on('kickPlayer', (playerId) => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            if (socket.id !== game.hostId) {
+                socket.emit('error', 'Only the host can kick players');
+                return;
+            }
+
+            if (playerId === socket.id) {
+                socket.emit('error', 'You cannot kick yourself');
+                return;
+            }
+
+            const player = game.players.find(p => p.id === playerId);
+            if (!player) {
+                socket.emit('error', 'Player not found');
+                return;
+            }
+
+            const playerName = player.name;
+
+            // Remove from game state
+            game.players = game.players.filter(p => p.id !== playerId);
+            game.waitingPlayers = game.waitingPlayers.filter(p => p.id !== playerId);
+
+            // ✅ FIX: Remove from rebuy requests
+            game.rebuyRequests = game.rebuyRequests.filter(r => r.playerId !== playerId);
+
+            const kickedSocket = io.sockets.sockets.get(playerId);
+            if (kickedSocket) {
+                // ✅ CRITICAL: Clean up ALL server-side state
+                kickedSocket.data.roomId = null;
+                kickedSocket.data.playerName = null;
+                playerRooms.delete(playerId);     // ✅ FIX: Remove from Map
+                kickedSocket.leave(roomId);       // ✅ FIX: Leave Socket.IO room
+
+                // Send kick notification
+                kickedSocket.emit('kicked', 'You have been removed from the game by the host');
+
+                console.log('✅ ' + playerName + ' fully disconnected from server state');
+            }
+
+            // Notify other players
+            io.to(roomId).emit('chatMessage', {
+                type: 'system',
+                text: '🚫 ' + playerName + ' was removed by host',
+                timestamp: Date.now()
+            });
+
+            // Update game state
+            game.emitState();
+
+            console.log(playerName + ' was kicked by host from room ' + roomId);
+        } catch (error) {
+            console.error('Error in kickPlayer:', error);
+            socket.emit('error', 'Failed to kick player');
+        }
+    });
+
+    // NEW: Request rebuy
+    socket.on('requestRebuy', () => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            const player = game.players.find(p => p.id === socket.id);
+            if (!player) return;
+
+            if (!game.settings.rebuyEnabled) {
+                socket.emit('error', 'Rebuy is not enabled');
+                return;
+            }
+
+            if (player.chips > 0) {
+                socket.emit('error', 'You still have chips');
+                return;
+            }
+
+            const existingRequest = game.rebuyRequests.find(r => r.playerId === socket.id);
+            if (existingRequest) {
+                socket.emit('error', 'You already have a pending rebuy request');
+                return;
+            }
+
+            game.rebuyRequests.push({
+                playerId: socket.id,
+                playerName: player.name
+            });
+
+            console.log(player.name + ' requested rebuy');
+
+            game.emitState();
+
+            io.to(game.hostId).emit('rebuyRequest', {
+                playerId: socket.id,
+                playerName: player.name
+            });
+
+            io.to(roomId).emit('chatMessage', {
+                type: 'system',
+                text: player.name + ' requested a rebuy',
+                timestamp: Date.now()
+            });
+        } catch (error) {
+            console.error('Error in requestRebuy:', error);
+            socket.emit('error', 'Failed to request rebuy');
+        }
+    });
+
+    // NEW: Handle rebuy approval/denial
+    socket.on('handleRebuy', ({ playerId, approved }) => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            if (socket.id !== game.hostId) {
+                socket.emit('error', 'Only the host can handle rebuy requests');
+                return;
+            }
+
+            const requestIndex = game.rebuyRequests.findIndex(r => r.playerId === playerId);
+            if (requestIndex === -1) {
+                socket.emit('error', 'Rebuy request not found');
+                return;
+            }
+
+            const request = game.rebuyRequests[requestIndex];
+            game.rebuyRequests.splice(requestIndex, 1);
+
+            const player = game.players.find(p => p.id === playerId);
+
+            if (approved && player) {
+                player.chips = game.settings.rebuyAmount;
+                console.log('Rebuy approved for ' + request.playerName);
+
+                io.to(roomId).emit('chatMessage', {
+                    type: 'system',
+                    text: '✅ ' + request.playerName + ' received rebuy ($' + game.settings.rebuyAmount + ')',
+                    timestamp: Date.now()
+                });
+
+                io.to(playerId).emit('chatMessage', {
+                    type: 'system',
+                    text: '✅ Your rebuy was approved!',
+                    timestamp: Date.now()
+                });
+            } else {
+                console.log('Rebuy denied for ' + request.playerName);
+
+                io.to(playerId).emit('chatMessage', {
+                    type: 'system',
+                    text: '❌ Your rebuy was denied',
+                    timestamp: Date.now()
+                });
+            }
+
+            game.emitState();
+        } catch (error) {
+            console.error('Error in handleRebuy:', error);
+            socket.emit('error', 'Failed to handle rebuy');
         }
     });
 
@@ -1127,18 +1452,22 @@ http.listen(PORT, HOST, () => {
     const localIP = getLocalIP();
     console.log('');
     console.log('='.repeat(70));
-    console.log('  🎰 TEXAS HOLD\'EM POKER - ENHANCED');
+    console.log('  🎰 TEXAS HOLD\'EM POKER - COMPLETE & FIXED');
     console.log('='.repeat(70));
     console.log('');
     console.log('  📍 Local:   http://localhost:' + PORT);
     console.log('  🌐 Network: http://' + localIP + ':' + PORT);
     console.log('');
     console.log('  ✓ Hand evaluation working');
-    console.log('  ✓ 60-second action timer');
+    console.log('  ✓ Action timer (configurable)');
     console.log('  ✓ Showdown cards display');
     console.log('  ✓ Away/idle mode');
-    console.log('  ✓ All bug fixes included');
+    console.log('  ✓ Settings panel (host)');
+    console.log('  ✓ Player management (kick/give chips)');
+    console.log('  ✓ Rebuy system');
+    console.log('  ✓ Hand history');
+    console.log('  ✓ Kick/rejoin bug FIXED');
+    console.log('  ✓ All cleanup bugs fixed');
     console.log('');
     console.log('='.repeat(70));
     console.log('');
-});
