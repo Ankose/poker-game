@@ -291,6 +291,7 @@ class PokerGame {
         this.createdAt = Date.now();
         this.actionTimer = null;
         this.showdownCards = null; // NEW: For showdown display
+        
     }
 
     addPlayer(socketId, playerName) {
