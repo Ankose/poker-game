@@ -99,7 +99,7 @@ roomCodeInput.addEventListener('keypress', (e) => {
 
 function handleJoin() {
     const name = playerNameInput.value.trim();
-    const room = roomCodeInput.value.trim().toUpperCase();
+    let room = roomCodeInput.value.trim().toUpperCase();
 
     if (!name) {
         alert('Please enter your name');
@@ -110,6 +110,33 @@ function handleJoin() {
     if (name.length < 2 || name.length > 20) {
         alert('Name must be 2-20 characters');
         playerNameInput.focus();
+        return;
+    }
+
+    // Creating new room - no check needed
+    if (!room) {
+        myPlayerName = name;
+        console.log('Joining game:', { name, room: 'new room' });
+        socket.emit('joinGame', { playerName: name, roomId: room });
+        return;
+    }
+
+    // Check if already in this room from this browser
+    if (isAlreadyInRoom(room)) {
+        const key = getStorageKey(room);
+        const data = localStorage.getItem(key);
+        let existingName = 'a player';
+        
+        try {
+            const parsed = JSON.parse(data);
+            if (parsed.playerName) {
+                existingName = parsed.playerName;
+            }
+        } catch (e) {}
+        
+        alert('⚠️ This browser is already in room ' + room + ' as "' + existingName + '"\n\nYou cannot join the same room multiple times from the same device.\n\nTo play with multiple accounts, use a different browser or device.');
+        roomCodeInput.value = '';
+        roomCodeInput.focus();
         return;
     }
 
