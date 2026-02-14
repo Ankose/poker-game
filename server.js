@@ -41,8 +41,7 @@ const VALUE_NAMES = {
     6: 'Six', 5: 'Five', 4: 'Four', 3: 'Three', 2: 'Two'
 };
 
-// ===== BUG FIX #3: Add 60-second timeout =====
-const ACTION_TIMEOUT_MS = 60000; // 60 seconds
+const ACTION_TIMEOUT_MS = 60000;
 
 function generateRoomCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -290,11 +289,11 @@ class PokerGame {
         this.lastAction = 'Waiting for host to start the game';
         this.hostId = null;
         this.createdAt = Date.now();
-        this.actionTimer = null; // BUG FIX #3: Timer reference
+        this.actionTimer = null;
+        this.showdownCards = null; // NEW: For showdown display
     }
 
     addPlayer(socketId, playerName) {
-        // ===== BUG FIX #2: Prevent duplicate joins =====
         const existingPlayer = this.players.find(p => p.id === socketId);
         if (existingPlayer) {
             console.log('Player ' + playerName + ' already in game (duplicate prevented)');
@@ -306,7 +305,6 @@ class PokerGame {
             console.log('Player ' + playerName + ' already waiting (duplicate prevented)');
             return 'already-waiting';
         }
-        // ===== END BUG FIX #2 =====
 
         const player = {
             id: socketId,
@@ -317,7 +315,8 @@ class PokerGame {
             folded: false,
             allIn: false,
             hasActed: false,
-            bestHand: null
+            bestHand: null,
+            isAway: false // NEW: Away status
         };
 
         if (!this.hostId) {
@@ -336,19 +335,38 @@ class PokerGame {
         }
     }
 
+    // NEW: Toggle away mode
+    toggleAway(socketId) {
+        const player = this.players.find(p => p.id === socketId);
+        if (player) {
+            player.isAway = !player.isAway;
+            console.log(player.name + ' is now ' + (player.isAway ? 'AWAY' : 'ACTIVE'));
+
+            // If going away during their turn, auto-fold
+            if (player.isAway && this.players[this.currentPlayerIndex]?.id === socketId && this.handInProgress) {
+                this.clearActionTimer();
+                player.folded = true;
+                player.hasActed = true;
+                this.lastAction = player.name + ' went away (auto-fold)';
+                this.nextPlayer();
+            }
+
+            return player.isAway;
+        }
+        return false;
+    }
+
     removePlayer(socketId) {
         const playerName = this.players.find(p => p.id === socketId)?.name || 
                           this.waitingPlayers.find(p => p.id === socketId)?.name || 
                           'Unknown';
 
-        // ===== BUG FIX #1: Clear timer if this player was acting =====
         const wasCurrentPlayer = this.players[this.currentPlayerIndex]?.id === socketId;
         if (wasCurrentPlayer && this.actionTimer) {
             clearTimeout(this.actionTimer);
             this.actionTimer = null;
             console.log('Timer cleared for disconnected player');
         }
-        // ===== END BUG FIX #1 (part 1) =====
 
         this.players = this.players.filter(p => p.id !== socketId);
         this.waitingPlayers = this.waitingPlayers.filter(p => p.id !== socketId);
@@ -368,15 +386,13 @@ class PokerGame {
             }
         }
 
-        // ===== BUG FIX #1: Auto-advance to next player if current player left =====
         if (wasCurrentPlayer && this.handInProgress) {
             console.log('Current player left - auto-folding and advancing');
             this.lastAction = playerName + ' disconnected (auto-fold)';
             this.nextPlayer();
         }
-        // ===== END BUG FIX #1 (part 2) =====
 
-        if (this.handInProgress && this.players.filter(p => !p.folded).length < 2) {
+        if (this.handInProgress && this.players.filter(p => !p.folded && !p.isAway).length < 2) {
             console.log('Not enough players, ending hand');
             this.endHand();
         }
@@ -396,12 +412,11 @@ class PokerGame {
         return deck;
     }
 
-    // ===== BUG FIX #3: Start 60-second timer =====
     startActionTimer(io) {
         this.clearActionTimer();
 
         const currentPlayer = this.players[this.currentPlayerIndex];
-        if (!currentPlayer || currentPlayer.folded || currentPlayer.allIn) {
+        if (!currentPlayer || currentPlayer.folded || currentPlayer.allIn || currentPlayer.isAway) {
             return;
         }
 
@@ -410,21 +425,17 @@ class PokerGame {
         this.actionTimer = setTimeout(() => {
             console.log('⏰ TIME EXPIRED - Auto-folding ' + currentPlayer.name);
 
-            // Auto-fold
             currentPlayer.folded = true;
             currentPlayer.hasActed = true;
             this.lastAction = currentPlayer.name + ' timed out (auto-fold)';
 
-            // Move to next player
             this.nextPlayer();
 
-            // Notify all players
             io.to(this.roomId).emit('gameState', this.getState());
             this.players.forEach(p => {
                 io.to(p.id).emit('privateState', this.getPrivateState(p.id));
             });
 
-            // Start timer for next player
             if (this.handInProgress) {
                 this.startActionTimer(io);
             }
@@ -437,11 +448,13 @@ class PokerGame {
             this.actionTimer = null;
         }
     }
-    // ===== END BUG FIX #3 =====
 
     startGame() {
-        if (this.players.length < 2) {
-            console.log('Cannot start: need at least 2 players');
+        // Skip away players
+        const activePlayers = this.players.filter(p => !p.isAway);
+
+        if (activePlayers.length < 2) {
+            console.log('Cannot start: need at least 2 active players');
             return false;
         }
         if (this.handInProgress) {
@@ -459,11 +472,12 @@ class PokerGame {
         this.currentBet = this.bigBlind;
         this.minRaise = this.bigBlind;
         this.bettingRound = 0;
+        this.showdownCards = null; // NEW: Reset showdown
 
         this.players.forEach(p => {
             p.cards = [];
             p.bet = 0;
-            p.folded = false;
+            p.folded = p.isAway; // NEW: Auto-fold away players
             p.allIn = false;
             p.hasActed = false;
             p.bestHand = null;
@@ -471,7 +485,7 @@ class PokerGame {
 
         for (let i = 0; i < 2; i++) {
             for (let player of this.players) {
-                if (this.deck.length > 0) {
+                if (!player.isAway && this.deck.length > 0) {
                     player.cards.push(this.deck.pop());
                 }
             }
@@ -486,19 +500,23 @@ class PokerGame {
             const sbPlayer = this.players[sbIndex];
             const bbPlayer = this.players[bbIndex];
 
-            const sbAmount = Math.min(this.smallBlind, sbPlayer.chips);
-            sbPlayer.chips -= sbAmount;
-            sbPlayer.bet = sbAmount;
-            this.pot += sbAmount;
-            if (sbPlayer.chips === 0) sbPlayer.allIn = true;
+            if (!sbPlayer.isAway) {
+                const sbAmount = Math.min(this.smallBlind, sbPlayer.chips);
+                sbPlayer.chips -= sbAmount;
+                sbPlayer.bet = sbAmount;
+                this.pot += sbAmount;
+                if (sbPlayer.chips === 0) sbPlayer.allIn = true;
+            }
 
-            const bbAmount = Math.min(this.bigBlind, bbPlayer.chips);
-            bbPlayer.chips -= bbAmount;
-            bbPlayer.bet = bbAmount;
-            this.pot += bbAmount;
-            if (bbPlayer.chips === 0) bbPlayer.allIn = true;
+            if (!bbPlayer.isAway) {
+                const bbAmount = Math.min(this.bigBlind, bbPlayer.chips);
+                bbPlayer.chips -= bbAmount;
+                bbPlayer.bet = bbAmount;
+                this.pot += bbAmount;
+                if (bbPlayer.chips === 0) bbPlayer.allIn = true;
+            }
 
-            console.log('Blinds posted: SB=' + sbAmount + ', BB=' + bbAmount);
+            console.log('Blinds posted');
         }
 
         if (this.players.length === 2) {
@@ -510,7 +528,8 @@ class PokerGame {
         let attempts = 0;
         while (attempts < this.players.length && 
                (this.players[this.currentPlayerIndex].folded || 
-                this.players[this.currentPlayerIndex].allIn)) {
+                this.players[this.currentPlayerIndex].allIn ||
+                this.players[this.currentPlayerIndex].isAway)) {
             this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
             attempts++;
         }
@@ -528,8 +547,8 @@ class PokerGame {
         }
 
         const player = this.players[playerIndex];
-        if (player.folded || player.allIn) {
-            console.log('Player cannot act (folded or all-in)');
+        if (player.folded || player.allIn || player.isAway) {
+            console.log('Player cannot act');
             return false;
         }
         if (this.currentPlayerIndex !== playerIndex) {
@@ -537,7 +556,6 @@ class PokerGame {
             return false;
         }
 
-        // BUG FIX #3: Clear timer when player acts
         this.clearActionTimer();
 
         let actionSuccess = false;
@@ -600,7 +618,7 @@ class PokerGame {
                     this.minRaise = raiseAmount;
 
                     this.players.forEach((p, idx) => {
-                        if (idx !== playerIndex && !p.folded && !p.allIn) {
+                        if (idx !== playerIndex && !p.folded && !p.allIn && !p.isAway) {
                             p.hasActed = false;
                         }
                     });
@@ -628,10 +646,10 @@ class PokerGame {
     }
 
     nextPlayer() {
-        const activePlayers = this.players.filter(p => !p.folded);
+        const activePlayers = this.players.filter(p => !p.folded && !p.isAway);
         if (activePlayers.length <= 1) {
             console.log('Only one player left, ending hand');
-            this.clearActionTimer(); // BUG FIX #3
+            this.clearActionTimer();
             this.endHand();
             return;
         }
@@ -647,7 +665,8 @@ class PokerGame {
             attempts++;
         } while (attempts < this.players.length && 
                  (this.players[this.currentPlayerIndex].folded || 
-                  this.players[this.currentPlayerIndex].allIn));
+                  this.players[this.currentPlayerIndex].allIn ||
+                  this.players[this.currentPlayerIndex].isAway));
 
         if (attempts >= this.players.length) {
             console.log('All players acted, advancing street');
@@ -658,7 +677,7 @@ class PokerGame {
     }
 
     isBettingRoundComplete() {
-        const activePlayers = this.players.filter(p => !p.folded && !p.allIn);
+        const activePlayers = this.players.filter(p => !p.folded && !p.allIn && !p.isAway);
         if (activePlayers.length === 0) return true;
         return activePlayers.every(p => p.hasActed && p.bet === this.currentBet);
     }
@@ -671,7 +690,7 @@ class PokerGame {
         this.minRaise = this.bigBlind;
         this.players.forEach(p => {
             p.bet = 0;
-            if (!p.folded && !p.allIn) {
+            if (!p.folded && !p.allIn && !p.isAway) {
                 p.hasActed = false;
             }
         });
@@ -698,7 +717,7 @@ class PokerGame {
                 console.log('River: ' + this.communityCards[4].rank + this.communityCards[4].suit);
             }
         } else {
-            this.clearActionTimer(); // BUG FIX #3
+            this.clearActionTimer();
             this.endHand();
             return;
         }
@@ -708,12 +727,13 @@ class PokerGame {
         let attempts = 0;
         while (attempts < this.players.length && 
                (this.players[this.currentPlayerIndex].folded || 
-                this.players[this.currentPlayerIndex].allIn)) {
+                this.players[this.currentPlayerIndex].allIn ||
+                this.players[this.currentPlayerIndex].isAway)) {
             this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
             attempts++;
         }
 
-        const playersToAct = this.players.filter(p => !p.folded && !p.allIn);
+        const playersToAct = this.players.filter(p => !p.folded && !p.allIn && !p.isAway);
         if (playersToAct.length === 0 && this.bettingRound < 3) {
             console.log('All players all-in, auto-advancing');
             setTimeout(() => this.advanceStreet(), 1500);
@@ -722,10 +742,25 @@ class PokerGame {
 
     endHand() {
         this.handInProgress = false;
-        this.clearActionTimer(); // BUG FIX #3
+        this.clearActionTimer();
         console.log('Hand ended');
 
-        const activePlayers = this.players.filter(p => !p.folded);
+        const activePlayers = this.players.filter(p => !p.folded && !p.isAway);
+
+        // NEW: Collect showdown data
+        if (activePlayers.length > 1) {
+            this.showdownCards = activePlayers.map(p => {
+                const hand = evaluateHand(p.cards, this.communityCards);
+                return {
+                    id: p.id,
+                    name: p.name,
+                    cards: p.cards,
+                    hand: getHandDescription(hand)
+                };
+            });
+        } else {
+            this.showdownCards = null;
+        }
 
         if (activePlayers.length === 1) {
             activePlayers[0].chips += this.pot;
@@ -781,10 +816,10 @@ class PokerGame {
             this.waitingPlayers = [];
         }
 
-        if (this.players.length < 2) {
+        if (this.players.filter(p => !p.isAway).length < 2) {
             this.gameStarted = false;
             this.lastAction = 'Waiting for more players...';
-            console.log('Not enough players to continue');
+            console.log('Not enough active players to continue');
         }
     }
 
@@ -797,7 +832,8 @@ class PokerGame {
                 bet: p.bet,
                 folded: p.folded,
                 allIn: p.allIn,
-                cardCount: p.cards.length
+                cardCount: p.cards.length,
+                isAway: p.isAway // NEW
             })),
             waitingPlayers: this.waitingPlayers.map(p => ({
                 id: p.id,
@@ -813,7 +849,8 @@ class PokerGame {
             handInProgress: this.handInProgress,
             lastAction: this.lastAction,
             hostId: this.hostId,
-            bettingRound: this.bettingRound
+            bettingRound: this.bettingRound,
+            showdownCards: this.showdownCards // NEW
         };
     }
 
@@ -822,7 +859,7 @@ class PokerGame {
         if (!player) return { cards: [], handDescription: '' };
 
         let handDescription = '';
-        if (this.communityCards.length >= 3) {
+        if (this.communityCards.length >= 3 && !player.isAway) {
             const hand = evaluateHand(player.cards, this.communityCards);
             handDescription = getHandDescription(hand);
         }
@@ -902,6 +939,33 @@ io.on('connection', (socket) => {
         }
     });
 
+    // NEW: Toggle away
+    socket.on('toggleAway', () => {
+        try {
+            const roomId = socket.data.roomId;
+            if (!roomId) return;
+
+            const game = games.get(roomId);
+            if (!game) return;
+
+            const isAway = game.toggleAway(socket.id);
+            io.to(roomId).emit('gameState', game.getState());
+
+            const playerName = socket.data.playerName;
+            io.to(roomId).emit('chatMessage', {
+                type: 'system',
+                text: playerName + (isAway ? ' is now away' : ' is back'),
+                timestamp: Date.now()
+            });
+
+            if (game.handInProgress) {
+                game.startActionTimer(io);
+            }
+        } catch (error) {
+            console.error('Error in toggleAway:', error);
+        }
+    });
+
     socket.on('startGame', () => {
         try {
             const roomId = socket.data.roomId;
@@ -915,8 +979,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            if (game.players.length < 2) {
-                socket.emit('error', 'Need at least 2 players to start');
+            if (game.players.filter(p => !p.isAway).length < 2) {
+                socket.emit('error', 'Need at least 2 active players to start');
                 return;
             }
 
@@ -931,7 +995,6 @@ io.on('connection', (socket) => {
                     timestamp: Date.now()
                 });
 
-                // BUG FIX #3: Start timer for first player
                 game.startActionTimer(io);
 
                 console.log('✓ Game started in room ' + roomId);
@@ -957,7 +1020,6 @@ io.on('connection', (socket) => {
                     io.to(p.id).emit('privateState', game.getPrivateState(p.id));
                 });
 
-                // BUG FIX #3: Start timer for next player
                 if (game.handInProgress) {
                     game.startActionTimer(io);
                 }
@@ -980,14 +1042,13 @@ io.on('connection', (socket) => {
 
             if (socket.id !== game.hostId) return;
 
-            if (!game.handInProgress && game.players.length >= 2) {
+            if (!game.handInProgress && game.players.filter(p => !p.isAway).length >= 2) {
                 game.startGame();
                 io.to(roomId).emit('gameState', game.getState());
                 game.players.forEach(p => {
                     io.to(p.id).emit('privateState', game.getPrivateState(p.id));
                 });
 
-                // BUG FIX #3: Start timer for first player
                 game.startActionTimer(io);
             }
         } catch (error) {
@@ -1048,7 +1109,6 @@ io.on('connection', (socket) => {
                     timestamp: Date.now()
                 });
 
-                // BUG FIX #1 & #3: Restart timer if game still in progress
                 if (game.handInProgress) {
                     game.startActionTimer(io);
                 }
@@ -1066,7 +1126,7 @@ http.listen(PORT, HOST, () => {
     const localIP = getLocalIP();
     console.log('');
     console.log('='.repeat(70));
-    console.log('  🎰 TEXAS HOLD\'EM POKER SERVER - BUG FIXED');
+    console.log('  🎰 TEXAS HOLD\'EM POKER - ENHANCED');
     console.log('='.repeat(70));
     console.log('');
     console.log('  📍 Local:   http://localhost:' + PORT);
@@ -1074,8 +1134,9 @@ http.listen(PORT, HOST, () => {
     console.log('');
     console.log('  ✓ Hand evaluation working');
     console.log('  ✓ 60-second action timer');
-    console.log('  ✓ Auto-advance on disconnect');
-    console.log('  ✓ Duplicate join prevention');
+    console.log('  ✓ Showdown cards display');
+    console.log('  ✓ Away/idle mode');
+    console.log('  ✓ All bug fixes included');
     console.log('');
     console.log('='.repeat(70));
     console.log('');
