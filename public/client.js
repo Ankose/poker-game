@@ -250,14 +250,15 @@ function updatePlayerManagementList() {
 
         const isMe = player.id === mySocketId;
 
+        // ✅ FIX #1: Move "Give Chips" button OUTSIDE the !isMe check so host can give chips to themselves
         item.innerHTML = `
             <div class="player-management-info">
                 <div class="player-management-name">${escapeHtml(player.name)}${isMe ? ' (You)' : ''}</div>
                 <div class="player-management-chips">💰 $${player.chips}</div>
             </div>
             <div class="player-management-actions">
+                <button class="btn-small btn-give" data-player-id="${player.id}">Give Chips</button>
                 ${!isMe ? `
-                    <button class="btn-small btn-give" data-player-id="${player.id}">Give Chips</button>
                     <button class="btn-small btn-kick" data-player-id="${player.id}">Kick</button>
                 ` : ''}
             </div>
@@ -927,6 +928,7 @@ socket.on('kicked', (reason) => {
         console.log('✅ Ready to rejoin. Room', oldRoom, 'lock cleared.');
     }, 2000);
 });
+
 // ========== UPDATE GAME UI ==========
 
 function updateGame(state) {
@@ -972,7 +974,10 @@ function updateGame(state) {
         const isYou = player.id === mySocketId;
         let statusHTML = '';
 
-        if (player.isAway) {
+        // ✅ FIX #2: Add check for broke players FIRST (before isAway check)
+        if (player.chips === 0) {
+            statusHTML = '<div class="player-status away-status">BROKE</div>';
+        } else if (player.isAway) {
             statusHTML = '<div class="player-status away-status">AWAY</div>';
         } else if (player.folded) {
             statusHTML = '<div class="player-status">FOLDED</div>';
@@ -1199,3 +1204,5 @@ console.log('🔒 Browser lock enabled - one seat per device per room');
 console.log('🎨 Toast notifications enabled');
 console.log('⚙️  Settings panel enabled');
 console.log('📜 Hand history enabled');
+console.log('✅ FIXED: Host can give chips to themselves');
+console.log('✅ FIXED: Broke players show BROKE status');
