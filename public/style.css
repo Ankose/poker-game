@@ -558,7 +558,7 @@ body {
 
 .your-info {
     margin-left: 16px;
-    font-size: 13px;
+    font-size: 17px;
     font-weight: 500;
     color: var(--text-secondary);
 }
@@ -764,7 +764,7 @@ body {
 .away-btn {
     position: fixed;
     bottom: 180px;
-    right: 24px;
+    left: 24px;
     display: flex;
     align-items: center;
     gap: 8px;
