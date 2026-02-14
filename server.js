@@ -41,11 +41,14 @@ const VALUE_NAMES = {
     6: 'Six', 5: 'Five', 4: 'Four', 3: 'Three', 2: 'Two'
 };
 
+// ===== BUG FIX #3: Add 60-second timeout =====
+const ACTION_TIMEOUT_MS = 60000; // 60 seconds
+
 function generateRoomCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// ========== HAND EVALUATION ==========
+// ========== HAND EVALUATION (UNCHANGED) ==========
 
 function get5CardCombos(cards) {
     if (cards.length < 5) return [];
@@ -81,7 +84,6 @@ function checkStraight(sorted) {
 
     if (isStraight) return true;
 
-    // Check A-2-3-4-5 (wheel)
     if (sorted[0].value === 14 && sorted[1].value === 5 && 
         sorted[2].value === 4 && sorted[3].value === 3 && sorted[4].value === 2) {
         return true;
@@ -104,7 +106,6 @@ function checkHand(cards) {
     const counts = Object.values(rankCounts).sort((a, b) => b - a);
     const values = Object.keys(rankCounts).map(Number).sort((a, b) => b - a);
 
-    // Royal Flush
     if (isFlush && isStraight && sorted[0].value === 14) {
         return {
             rank: 10,
@@ -114,7 +115,6 @@ function checkHand(cards) {
         };
     }
 
-    // Straight Flush
     if (isFlush && isStraight) {
         return {
             rank: 9,
@@ -124,7 +124,6 @@ function checkHand(cards) {
         };
     }
 
-    // Four of a Kind
     if (counts[0] === 4) {
         const quadValue = values.find(v => rankCounts[v] === 4);
         const kicker = values.find(v => rankCounts[v] === 1);
@@ -136,7 +135,6 @@ function checkHand(cards) {
         };
     }
 
-    // Full House
     if (counts[0] === 3 && counts[1] === 2) {
         const tripValue = values.find(v => rankCounts[v] === 3);
         const pairValue = values.find(v => rankCounts[v] === 2);
@@ -148,7 +146,6 @@ function checkHand(cards) {
         };
     }
 
-    // Flush
     if (isFlush) {
         return {
             rank: 6,
@@ -158,7 +155,6 @@ function checkHand(cards) {
         };
     }
 
-    // Straight
     if (isStraight) {
         return {
             rank: 5,
@@ -168,7 +164,6 @@ function checkHand(cards) {
         };
     }
 
-    // Three of a Kind
     if (counts[0] === 3) {
         const tripValue = values.find(v => rankCounts[v] === 3);
         const kickers = values.filter(v => rankCounts[v] === 1);
@@ -180,7 +175,6 @@ function checkHand(cards) {
         };
     }
 
-    // Two Pair
     if (counts[0] === 2 && counts[1] === 2) {
         const pairs = values.filter(v => rankCounts[v] === 2).sort((a, b) => b - a);
         const kicker = values.find(v => rankCounts[v] === 1);
@@ -192,7 +186,6 @@ function checkHand(cards) {
         };
     }
 
-    // One Pair
     if (counts[0] === 2) {
         const pairValue = values.find(v => rankCounts[v] === 2);
         const kickers = values.filter(v => rankCounts[v] === 1);
@@ -204,7 +197,6 @@ function checkHand(cards) {
         };
     }
 
-    // High Card
     return {
         rank: 1,
         name: 'High Card',
@@ -298,20 +290,23 @@ class PokerGame {
         this.lastAction = 'Waiting for host to start the game';
         this.hostId = null;
         this.createdAt = Date.now();
+        this.actionTimer = null; // BUG FIX #3: Timer reference
     }
 
     addPlayer(socketId, playerName) {
+        // ===== BUG FIX #2: Prevent duplicate joins =====
         const existingPlayer = this.players.find(p => p.id === socketId);
         if (existingPlayer) {
-            console.log('Player ' + playerName + ' already in game');
+            console.log('Player ' + playerName + ' already in game (duplicate prevented)');
             return 'already-joined';
         }
 
         const existingWaiting = this.waitingPlayers.find(p => p.id === socketId);
         if (existingWaiting) {
-            console.log('Player ' + playerName + ' already waiting');
+            console.log('Player ' + playerName + ' already waiting (duplicate prevented)');
             return 'already-waiting';
         }
+        // ===== END BUG FIX #2 =====
 
         const player = {
             id: socketId,
@@ -346,6 +341,15 @@ class PokerGame {
                           this.waitingPlayers.find(p => p.id === socketId)?.name || 
                           'Unknown';
 
+        // ===== BUG FIX #1: Clear timer if this player was acting =====
+        const wasCurrentPlayer = this.players[this.currentPlayerIndex]?.id === socketId;
+        if (wasCurrentPlayer && this.actionTimer) {
+            clearTimeout(this.actionTimer);
+            this.actionTimer = null;
+            console.log('Timer cleared for disconnected player');
+        }
+        // ===== END BUG FIX #1 (part 1) =====
+
         this.players = this.players.filter(p => p.id !== socketId);
         this.waitingPlayers = this.waitingPlayers.filter(p => p.id !== socketId);
 
@@ -363,6 +367,14 @@ class PokerGame {
                 console.log('No host - game empty');
             }
         }
+
+        // ===== BUG FIX #1: Auto-advance to next player if current player left =====
+        if (wasCurrentPlayer && this.handInProgress) {
+            console.log('Current player left - auto-folding and advancing');
+            this.lastAction = playerName + ' disconnected (auto-fold)';
+            this.nextPlayer();
+        }
+        // ===== END BUG FIX #1 (part 2) =====
 
         if (this.handInProgress && this.players.filter(p => !p.folded).length < 2) {
             console.log('Not enough players, ending hand');
@@ -383,6 +395,49 @@ class PokerGame {
         }
         return deck;
     }
+
+    // ===== BUG FIX #3: Start 60-second timer =====
+    startActionTimer(io) {
+        this.clearActionTimer();
+
+        const currentPlayer = this.players[this.currentPlayerIndex];
+        if (!currentPlayer || currentPlayer.folded || currentPlayer.allIn) {
+            return;
+        }
+
+        console.log('⏱️  60-second timer started for ' + currentPlayer.name);
+
+        this.actionTimer = setTimeout(() => {
+            console.log('⏰ TIME EXPIRED - Auto-folding ' + currentPlayer.name);
+
+            // Auto-fold
+            currentPlayer.folded = true;
+            currentPlayer.hasActed = true;
+            this.lastAction = currentPlayer.name + ' timed out (auto-fold)';
+
+            // Move to next player
+            this.nextPlayer();
+
+            // Notify all players
+            io.to(this.roomId).emit('gameState', this.getState());
+            this.players.forEach(p => {
+                io.to(p.id).emit('privateState', this.getPrivateState(p.id));
+            });
+
+            // Start timer for next player
+            if (this.handInProgress) {
+                this.startActionTimer(io);
+            }
+        }, ACTION_TIMEOUT_MS);
+    }
+
+    clearActionTimer() {
+        if (this.actionTimer) {
+            clearTimeout(this.actionTimer);
+            this.actionTimer = null;
+        }
+    }
+    // ===== END BUG FIX #3 =====
 
     startGame() {
         if (this.players.length < 2) {
@@ -482,6 +537,9 @@ class PokerGame {
             return false;
         }
 
+        // BUG FIX #3: Clear timer when player acts
+        this.clearActionTimer();
+
         let actionSuccess = false;
 
         switch (action) {
@@ -573,6 +631,7 @@ class PokerGame {
         const activePlayers = this.players.filter(p => !p.folded);
         if (activePlayers.length <= 1) {
             console.log('Only one player left, ending hand');
+            this.clearActionTimer(); // BUG FIX #3
             this.endHand();
             return;
         }
@@ -639,6 +698,7 @@ class PokerGame {
                 console.log('River: ' + this.communityCards[4].rank + this.communityCards[4].suit);
             }
         } else {
+            this.clearActionTimer(); // BUG FIX #3
             this.endHand();
             return;
         }
@@ -662,6 +722,7 @@ class PokerGame {
 
     endHand() {
         this.handInProgress = false;
+        this.clearActionTimer(); // BUG FIX #3
         console.log('Hand ended');
 
         const activePlayers = this.players.filter(p => !p.folded);
@@ -671,13 +732,11 @@ class PokerGame {
             this.lastAction = '🏆 ' + activePlayers[0].name + ' wins $' + this.pot;
             console.log(this.lastAction);
         } else if (activePlayers.length > 1) {
-            // Evaluate hands for all active players
             activePlayers.forEach(p => {
                 p.bestHand = evaluateHand(p.cards, this.communityCards);
                 console.log(p.name + ': ' + getHandDescription(p.bestHand));
             });
 
-            // Find winners
             let winners = [activePlayers[0]];
 
             for (let i = 1; i < activePlayers.length; i++) {
@@ -690,7 +749,6 @@ class PokerGame {
                 }
             }
 
-            // Distribute pot
             const winAmount = Math.floor(this.pot / winners.length);
             winners.forEach(w => w.chips += winAmount);
 
@@ -872,6 +930,10 @@ io.on('connection', (socket) => {
                     text: 'Game started!',
                     timestamp: Date.now()
                 });
+
+                // BUG FIX #3: Start timer for first player
+                game.startActionTimer(io);
+
                 console.log('✓ Game started in room ' + roomId);
             }
         } catch (error) {
@@ -891,10 +953,14 @@ io.on('connection', (socket) => {
             if (game.playerAction(socket.id, action, amount)) {
                 io.to(roomId).emit('gameState', game.getState());
 
-                // Update hand descriptions after each action
                 game.players.forEach(p => {
                     io.to(p.id).emit('privateState', game.getPrivateState(p.id));
                 });
+
+                // BUG FIX #3: Start timer for next player
+                if (game.handInProgress) {
+                    game.startActionTimer(io);
+                }
             } else {
                 socket.emit('error', 'Invalid action');
             }
@@ -920,6 +986,9 @@ io.on('connection', (socket) => {
                 game.players.forEach(p => {
                     io.to(p.id).emit('privateState', game.getPrivateState(p.id));
                 });
+
+                // BUG FIX #3: Start timer for first player
+                game.startActionTimer(io);
             }
         } catch (error) {
             console.error('Error in nextHand:', error);
@@ -978,6 +1047,11 @@ io.on('connection', (socket) => {
                     text: playerName + ' left the table',
                     timestamp: Date.now()
                 });
+
+                // BUG FIX #1 & #3: Restart timer if game still in progress
+                if (game.handInProgress) {
+                    game.startActionTimer(io);
+                }
             }
         } catch (error) {
             console.error('Error in disconnect:', error);
@@ -992,15 +1066,16 @@ http.listen(PORT, HOST, () => {
     const localIP = getLocalIP();
     console.log('');
     console.log('='.repeat(70));
-    console.log('  🎰 TEXAS HOLD\'EM POKER SERVER');
+    console.log('  🎰 TEXAS HOLD\'EM POKER SERVER - BUG FIXED');
     console.log('='.repeat(70));
     console.log('');
     console.log('  📍 Local:   http://localhost:' + PORT);
     console.log('  🌐 Network: http://' + localIP + ':' + PORT);
     console.log('');
-    console.log('  ✓ Multiplayer ready');
-    console.log('  ✓ Hand evaluation enabled');
-    console.log('  ✓ Proper winner detection');
+    console.log('  ✓ Hand evaluation working');
+    console.log('  ✓ 60-second action timer');
+    console.log('  ✓ Auto-advance on disconnect');
+    console.log('  ✓ Duplicate join prevention');
     console.log('');
     console.log('='.repeat(70));
     console.log('');
