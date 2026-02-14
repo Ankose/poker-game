@@ -32,12 +32,25 @@ const sendChat = document.getElementById('sendChat');
 const waitingList = document.getElementById('waitingList');
 const waitingPlayers = document.getElementById('waitingPlayers');
 
+// NEW: Timer, Away, Showdown elements
+const timerDisplay = document.getElementById('timerDisplay');
+const timerSeconds = document.getElementById('timerSeconds');
+const timerCircle = document.getElementById('timerCircle');
+const timerPlayerName = document.getElementById('timerPlayerName');
+const awayBtn = document.getElementById('awayBtn');
+const showdownModal = document.getElementById('showdownModal');
+const showdownPlayers = document.getElementById('showdownPlayers');
+const closeShowdown = document.getElementById('closeShowdown');
+
 let mySocketId = null;
 let currentRoom = '';
 let gameState = null;
 let myPlayerName = '';
 let reconnectAttempted = false;
 let myHandDescription = '';
+let timerInterval = null; // NEW
+let timerStartTime = null; // NEW
+let isAway = false; // NEW
 
 socket.on('connect', () => {
     mySocketId = socket.id;
@@ -114,6 +127,27 @@ startBtn.addEventListener('click', () => {
 nextBtn.addEventListener('click', () => {
     console.log('Starting next hand...');
     socket.emit('nextHand');
+});
+
+// NEW: Away Button
+awayBtn.addEventListener('click', () => {
+    isAway = !isAway;
+    socket.emit('toggleAway');
+
+    if (isAway) {
+        awayBtn.classList.add('active');
+        awayBtn.querySelector('.away-text').textContent = 'Back';
+    } else {
+        awayBtn.classList.remove('active');
+        awayBtn.querySelector('.away-text').textContent = 'Away';
+    }
+
+    console.log('Away status toggled:', isAway);
+});
+
+// NEW: Close Showdown
+closeShowdown.addEventListener('click', () => {
+    showdownModal.classList.add('hidden');
 });
 
 // Action Buttons
@@ -196,6 +230,97 @@ roomInfo.addEventListener('click', () => {
     });
 });
 
+// NEW: Timer Functions
+function startTimer(playerName) {
+    stopTimer();
+
+    timerStartTime = Date.now();
+    timerPlayerName.textContent = playerName;
+    timerDisplay.classList.remove('hidden');
+
+    updateTimerDisplay();
+
+    timerInterval = setInterval(() => {
+        updateTimerDisplay();
+    }, 100);
+}
+
+function updateTimerDisplay() {
+    const elapsed = Date.now() - timerStartTime;
+    const remaining = Math.max(0, 60 - Math.floor(elapsed / 1000));
+
+    timerSeconds.textContent = remaining;
+
+    // Update circle (circumference = 2 * π * 45 = 282.74)
+    const progress = remaining / 60;
+    const dashOffset = 283 * (1 - progress);
+    timerCircle.style.strokeDashoffset = dashOffset;
+
+    // Color based on time
+    if (remaining > 40) {
+        timerCircle.style.stroke = '#10b981'; // Green
+    } else if (remaining > 20) {
+        timerCircle.style.stroke = '#f59e0b'; // Orange
+    } else {
+        timerCircle.style.stroke = '#ef4444'; // Red
+    }
+
+    if (remaining === 0) {
+        stopTimer();
+    }
+}
+
+function stopTimer() {
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    timerDisplay.classList.add('hidden');
+}
+
+// NEW: Show Showdown Modal
+function showShowdown(players) {
+    showdownPlayers.innerHTML = '';
+
+    players.forEach(player => {
+        const div = document.createElement('div');
+        div.className = 'showdown-player';
+
+        const nameDiv = document.createElement('div');
+        nameDiv.className = 'showdown-player-name';
+        nameDiv.textContent = player.name;
+
+        const handDiv = document.createElement('div');
+        handDiv.className = 'showdown-player-hand';
+        handDiv.textContent = player.hand || '';
+
+        const cardsDiv = document.createElement('div');
+        cardsDiv.className = 'showdown-player-cards';
+
+        if (player.cards && player.cards.length > 0) {
+            player.cards.forEach(card => {
+                const cardEl = createCard(card);
+                cardsDiv.appendChild(cardEl);
+            });
+        }
+
+        div.appendChild(nameDiv);
+        if (player.hand) {
+            div.appendChild(handDiv);
+        }
+        div.appendChild(cardsDiv);
+
+        showdownPlayers.appendChild(div);
+    });
+
+    showdownModal.classList.remove('hidden');
+
+    // Auto-close after 12 seconds
+    setTimeout(() => {
+        showdownModal.classList.add('hidden');
+    }, 12000);
+}
+
 // Socket Events
 socket.on('roomAssigned', (room) => {
     currentRoom = room;
@@ -225,6 +350,13 @@ socket.on('gameState', (state) => {
         pot: state.pot,
         handInProgress: state.handInProgress
     });
+
+    // NEW: Show showdown if available
+    if (!state.handInProgress && state.showdownCards && state.showdownCards.length > 0) {
+        console.log('Showdown data received:', state.showdownCards);
+        showShowdown(state.showdownCards);
+    }
+
     updateGame(state);
 });
 
@@ -285,10 +417,17 @@ function updateGame(state) {
             card.classList.add('folded');
         }
 
+        // NEW: Away status styling
+        if (player.isAway) {
+            card.classList.add('away');
+        }
+
         const isYou = player.id === mySocketId;
         let statusHTML = '';
 
-        if (player.folded) {
+        if (player.isAway) {
+            statusHTML = '<div class="player-status away-status">AWAY</div>';
+        } else if (player.folded) {
             statusHTML = '<div class="player-status">FOLDED</div>';
         } else if (player.allIn) {
             statusHTML = '<div class="player-status">ALL-IN</div>';
@@ -324,7 +463,9 @@ function updateGame(state) {
     if (me) {
         let statusText = '';
 
-        if (me.folded) {
+        if (me.isAway) {
+            statusText = 'You are away';
+        } else if (me.folded) {
             statusText = 'You folded';
         } else if (me.allIn) {
             statusText = 'ALL-IN';
@@ -333,7 +474,7 @@ function updateGame(state) {
         }
 
         // Add hand description if available
-        if (myHandDescription && state.communityCards.length >= 3 && !me.folded) {
+        if (myHandDescription && state.communityCards.length >= 3 && !me.folded && !me.isAway) {
             statusText = myHandDescription + (statusText ? ' | ' + statusText : '');
         }
 
@@ -344,11 +485,23 @@ function updateGame(state) {
 
     // Action buttons
     const myTurn = state.players[state.currentPlayerIndex]?.id === mySocketId;
-    if (myTurn && state.handInProgress && me && !me.folded && !me.allIn) {
+    if (myTurn && state.handInProgress && me && !me.folded && !me.allIn && !me.isAway) {
         actionButtons.classList.remove('hidden');
         updateActions(state, me);
     } else {
         actionButtons.classList.add('hidden');
+    }
+
+    // NEW: Timer control
+    if (state.handInProgress && state.currentPlayerIndex >= 0) {
+        const currentPlayer = state.players[state.currentPlayerIndex];
+        if (currentPlayer && !currentPlayer.folded && !currentPlayer.allIn && !currentPlayer.isAway) {
+            startTimer(currentPlayer.name);
+        } else {
+            stopTimer();
+        }
+    } else {
+        stopTimer();
     }
 
     // Control buttons (host only)
@@ -479,3 +632,6 @@ playerNameInput.focus();
 console.log('🎰 Poker client initialized');
 console.log('📡 Socket.IO configured with reconnection');
 console.log('🃏 Hand evaluation enabled');
+console.log('⏱️  60-second timer enabled');
+console.log('🎴 Showdown display enabled');
+console.log('🚶 Away mode enabled');
