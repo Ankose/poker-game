@@ -48,9 +48,53 @@ let gameState = null;
 let myPlayerName = '';
 let reconnectAttempted = false;
 let myHandDescription = '';
-let timerInterval = null; // NEW
-let timerStartTime = null; // NEW
-let isAway = false; // NEW
+let timerInterval = null;
+let timerStartTime = null;
+let isAway = false;
+
+// ========== BROWSER LOCK FUNCTIONS ==========
+
+function getStorageKey(roomId) {
+    return 'poker_room_' + roomId;
+}
+
+function isAlreadyInRoom(roomId) {
+    const key = getStorageKey(roomId);
+    const data = localStorage.getItem(key);
+
+    if (!data) return false;
+
+    try {
+        const parsed = JSON.parse(data);
+        // Check if timestamp is less than 2 hours old
+        const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
+        if (parsed.timestamp < twoHoursAgo) {
+            localStorage.removeItem(key);
+            return false;
+        }
+        return parsed.joined === true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function markRoomJoined(roomId) {
+    const key = getStorageKey(roomId);
+    localStorage.setItem(key, JSON.stringify({
+        joined: true,
+        timestamp: Date.now(),
+        playerName: myPlayerName
+    }));
+    console.log('🔒 Browser locked to room:', roomId);
+}
+
+function clearRoomJoin(roomId) {
+    const key = getStorageKey(roomId);
+    localStorage.removeItem(key);
+    console.log('🔓 Browser lock cleared for room:', roomId);
+}
+
+// ========== END BROWSER LOCK FUNCTIONS ==========
 
 socket.on('connect', () => {
     mySocketId = socket.id;
@@ -126,14 +170,14 @@ function handleJoin() {
         const key = getStorageKey(room);
         const data = localStorage.getItem(key);
         let existingName = 'a player';
-        
+
         try {
             const parsed = JSON.parse(data);
             if (parsed.playerName) {
                 existingName = parsed.playerName;
             }
         } catch (e) {}
-        
+
         alert('⚠️ This browser is already in room ' + room + ' as "' + existingName + '"\n\nYou cannot join the same room multiple times from the same device.\n\nTo play with multiple accounts, use a different browser or device.');
         roomCodeInput.value = '';
         roomCodeInput.focus();
@@ -354,6 +398,7 @@ socket.on('roomAssigned', (room) => {
     roomDisplay.textContent = 'Room: ' + room;
 
     console.log('Room assigned:', room);
+    markRoomJoined(room);
 
     loginScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
@@ -662,3 +707,4 @@ console.log('🃏 Hand evaluation enabled');
 console.log('⏱️  60-second timer enabled');
 console.log('🎴 Showdown display enabled');
 console.log('🚶 Away mode enabled');
+console.log('🔒 Browser lock enabled - one seat per device per room');
