@@ -55,6 +55,19 @@
             </div>
         </header>
 
+        <!-- NEW: Timer Display (top right corner) -->
+        <div id="timerDisplay" class="timer-display hidden">
+            <svg class="timer-svg" viewBox="0 0 100 100">
+                <circle class="timer-circle-bg" cx="50" cy="50" r="45"></circle>
+                <circle id="timerCircle" class="timer-circle" cx="50" cy="50" r="45"></circle>
+            </svg>
+            <div class="timer-text">
+                <div id="timerSeconds" class="timer-seconds">60</div>
+                <div class="timer-label">sec</div>
+            </div>
+            <div id="timerPlayerName" class="timer-player-name"></div>
+        </div>
+
         <!-- Main Game Area -->
         <main class="game-main">
             <!-- Poker Table -->
@@ -125,6 +138,21 @@
                 </div>
             </div>
         </footer>
+
+        <!-- NEW: Away Button (bottom right) -->
+        <button id="awayBtn" class="away-btn">
+            <span class="away-icon">🚶</span>
+            <span class="away-text">Away</span>
+        </button>
+    </div>
+
+    <!-- NEW: Showdown Modal -->
+    <div id="showdownModal" class="showdown-modal hidden">
+        <div class="showdown-content">
+            <h2 class="showdown-title">🎴 Showdown</h2>
+            <div id="showdownPlayers" class="showdown-players"></div>
+            <button id="closeShowdown" class="close-showdown-btn">Close</button>
+        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
