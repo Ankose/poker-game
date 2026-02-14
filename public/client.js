@@ -890,17 +890,43 @@ socket.on('rebuyRequest', ({ playerId, playerName }) => {
 });
 
 socket.on('kicked', (reason) => {
-    toastError(reason);
+    console.log('❌ KICKED:', reason);
 
+    // ✅ CRITICAL: Clear browser lock IMMEDIATELY (before anything else!)
     if (currentRoom) {
         clearRoomJoin(currentRoom);
+        console.log('🔓 Browser lock cleared for room:', currentRoom);
     }
 
+    // Disconnect socket to prevent conflicts
+    socket.disconnect();
+
+    // Reset all local state
+    const oldRoom = currentRoom;
+    currentRoom = '';
+    myPlayerName = '';
+    gameState = null;
+
+    // Show error message
+    toastError(reason);
+
+    // After 2 seconds, reset to login screen
     setTimeout(() => {
-        window.location.reload();
+        // Reconnect socket
+        socket.connect();
+
+        // Switch screens (no page reload needed - smoother UX!)
+        gameScreen.classList.add('hidden');
+        loginScreen.classList.remove('hidden');
+
+        // Clear form inputs
+        playerNameInput.value = '';
+        roomCodeInput.value = '';
+        playerNameInput.focus();
+
+        console.log('✅ Ready to rejoin. Room', oldRoom, 'lock cleared.');
     }, 2000);
 });
-
 // ========== UPDATE GAME UI ==========
 
 function updateGame(state) {
