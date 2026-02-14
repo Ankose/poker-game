@@ -6,6 +6,7 @@ const socket = io({
 });
 
 // DOM Elements
+const exitBtn = document.getElementById('exitBtn');
 const loginScreen = document.getElementById('loginScreen');
 const gameScreen = document.getElementById('gameScreen');
 const playerNameInput = document.getElementById('playerName');
@@ -215,6 +216,43 @@ awayBtn.addEventListener('click', () => {
 
     console.log('Away status toggled:', isAway);
 });
+
+// NEW: Exit Game Button
+exitBtn.addEventListener('click', () => {
+    if (confirm('Are you sure you want to leave this game?\n\nYou will be removed from the room.')) {
+        console.log('Exiting game...');
+        
+        // Clear room lock
+        if (currentRoom) {
+            clearRoomJoin(currentRoom);
+        }
+        
+        // Disconnect and reload
+        socket.disconnect();
+        
+        // Reset state
+        currentRoom = '';
+        myPlayerName = '';
+        gameState = null;
+        
+        // Show login screen
+        gameScreen.classList.add('hidden');
+        loginScreen.classList.remove('hidden');
+        
+        // Clear inputs
+        playerNameInput.value = '';
+        roomCodeInput.value = '';
+        playerNameInput.focus();
+        
+        // Reconnect socket for next join
+        setTimeout(() => {
+            socket.connect();
+        }, 500);
+        
+        console.log('✅ Exited game successfully');
+    }
+});
+
 
 // NEW: Close Showdown
 closeShowdown.addEventListener('click', () => {
