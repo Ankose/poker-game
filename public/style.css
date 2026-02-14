@@ -797,6 +797,47 @@ body {
     font-size: 18px;
 }
 
+/* ========== NEW: EXIT BUTTON ========== */
+.exit-btn {
+    position: fixed;
+    bottom: 240px;     /* 60px above Away button */
+    left: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+    z-index: 100;
+}
+
+.exit-btn:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--accent-red);
+    transform: translateY(-2px);
+}
+
+.exit-icon {
+    font-size: 18px;
+}
+
+/* Mobile responsive */
+@media (max-width: 900px) {
+    .exit-btn {
+        bottom: 230px;
+        left: 20px;
+        padding: 8px 14px;
+        font-size: 13px;
+    }
+}
+
 /* ========== NEW: SHOWDOWN MODAL ========== */
 .showdown-modal {
     position: fixed;
