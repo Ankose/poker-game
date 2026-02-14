@@ -55,7 +55,7 @@
             </div>
         </header>
 
-        <!-- NEW: Timer Display (top right corner) -->
+        <!-- Timer Display -->
         <div id="timerDisplay" class="timer-display hidden">
             <svg class="timer-svg" viewBox="0 0 100 100">
                 <circle class="timer-circle-bg" cx="50" cy="50" r="45"></circle>
@@ -139,22 +139,38 @@
             </div>
         </footer>
 
-        <!-- NEW: Away Button (bottom right) -->
+        <!-- Exit Game Button -->
+        <button id="exitBtn" class="exit-btn">
+            <span class="exit-icon">🚪</span>
+            <span class="exit-text">Exit Game</span>
+        </button>
+
+        <!-- Away Button -->
         <button id="awayBtn" class="away-btn">
             <span class="away-icon">🚶</span>
             <span class="away-text">Away</span>
         </button>
-        <!-- Exit Game Button -->
-    <button id="exitBtn" class="exit-btn">
-        <span class="exit-icon">🚪</span>
-        <span class="exit-text">Exit Game</span>
-    </button>
 
+        <!-- Settings Button (Host Only) -->
+        <button id="settingsBtn" class="settings-btn hidden">
+            <span class="settings-icon">⚙️</span>
+            <span>Settings</span>
+        </button>
+
+        <!-- History Button -->
+        <button id="historyBtn" class="history-btn">
+            <span class="history-icon">📜</span>
+            <span>History</span>
+        </button>
+
+        <!-- Rebuy Button (Player, when eliminated) -->
+        <button id="rebuyBtn" class="rebuy-btn hidden">
+            <span class="rebuy-icon">💰</span>
+            <span>Request Rebuy</span>
+        </button>
     </div>
 
-        
-
-    <!-- NEW: Showdown Modal -->
+    <!-- Showdown Modal -->
     <div id="showdownModal" class="showdown-modal hidden">
         <div class="showdown-content">
             <h2 class="showdown-title">🎴 Showdown</h2>
@@ -162,6 +178,101 @@
             <button id="closeShowdown" class="close-showdown-btn">Close</button>
         </div>
     </div>
+
+    <!-- Settings Panel Modal -->
+    <div id="settingsModal" class="settings-modal hidden">
+        <div class="settings-content">
+            <div class="settings-header">
+                <h2>⚙️ Game Settings</h2>
+                <button id="closeSettings" class="modal-close">✕</button>
+            </div>
+
+            <div class="settings-body">
+                <!-- Game Settings -->
+                <div class="settings-section">
+                    <h3>🎮 Game Configuration</h3>
+                    <p class="settings-note">Can only be changed before game starts</p>
+
+                    <div class="settings-row">
+                        <label>Starting Chips 💰</label>
+                        <input type="number" id="startingChips" min="100" max="100000" step="100" value="1000">
+                    </div>
+
+                    <div class="settings-row">
+                        <label>Small Blind 💵</label>
+                        <input type="number" id="smallBlind" min="1" max="10000" step="5" value="10">
+                    </div>
+
+                    <div class="settings-row">
+                        <label>Big Blind 💵</label>
+                        <input type="number" id="bigBlind" min="2" max="20000" step="10" value="20">
+                    </div>
+
+                    <div class="settings-row">
+                        <label>Turn Timer ⏱️ (seconds)</label>
+                        <input type="number" id="turnTimer" min="10" max="300" step="10" value="60">
+                    </div>
+
+                    <button id="saveSettings" class="btn-primary">Save Settings</button>
+                </div>
+
+                <!-- Rebuy System -->
+                <div class="settings-section">
+                    <h3>🎁 Rebuy System</h3>
+
+                    <div class="settings-row">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="rebuyEnabled">
+                            <span>Enable Rebuys</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-row">
+                        <label>Rebuy Amount 💰</label>
+                        <input type="number" id="rebuyAmount" min="100" max="100000" step="100" value="1000">
+                    </div>
+                </div>
+
+                <!-- Player Management -->
+                <div class="settings-section">
+                    <h3>👥 Player Management</h3>
+                    <p class="settings-note">Can be done anytime</p>
+
+                    <div id="playerManagementList"></div>
+
+                    <div class="settings-row">
+                        <label>Give Chips 💰</label>
+                        <input type="number" id="giveChipsAmount" min="1" max="100000" step="100" value="500" placeholder="Amount">
+                    </div>
+                </div>
+
+                <!-- Rebuy Requests -->
+                <div id="rebuyRequestsSection" class="settings-section hidden">
+                    <h3>📋 Rebuy Requests</h3>
+                    <div id="rebuyRequestsList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hand History Sidebar -->
+    <div id="historySidebar" class="history-sidebar hidden">
+        <div class="history-header">
+            <h2>📜 Hand History</h2>
+            <button id="closeHistory" class="modal-close">✕</button>
+        </div>
+
+        <div id="historyContent" class="history-content">
+            <p class="history-empty">No hands played yet</p>
+        </div>
+
+        <div class="history-footer">
+            <button id="clearHistory" class="btn-secondary">Clear History</button>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="client.js"></script>
